@@ -1,0 +1,48 @@
+replicaCount: 1
+
+image:
+  repository: etracker-mcp
+  tag: latest
+  pullPolicy: IfNotPresent
+
+service:
+  type: ClusterIP
+  port: 80
+  targetPort: 3000
+  # Set type: NodePort and a nodePort value (30000-32767) for direct access
+  # without an ingress controller. On Docker Desktop use localhost:<nodePort>.
+  nodePort: ""
+  # Session affinity ensures a client always hits the same pod (required for
+  # in-memory MCP sessions). Increase sessionAffinityTimeoutSeconds if your
+  # clients hold long-running sessions.
+  sessionAffinity: ClientIP
+  sessionAffinityTimeoutSeconds: 3600
+
+ingress:
+  enabled: false
+  className: nginx
+  host: etracker-mcp.example.com
+  tls: false
+  # tlsSecretName: etracker-mcp-tls
+
+# Partner API keys → partner IDs (JSON object).
+# The etracker token is NOT stored here — partners pass it via X-ET-Token header.
+# Example: '{"key-abc":"partner-a","key-xyz":"partner-b"}'
+partnerApiKeys: ""
+
+# Optional etracker report ID overrides
+etrackerReports:
+  pageviews: ""    # default: EATime
+  conversions: ""  # default: EAConversion
+  ad: ""           # default: EAMarketing
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 256Mi
+
+# Number of old ReplicaSets to retain
+revisionHistoryLimit: 3

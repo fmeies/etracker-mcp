@@ -1,0 +1,60 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "etracker-mcp.name" . }}
+  labels:
+    {{- include "etracker-mcp.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  revisionHistoryLimit: {{ .Values.revisionHistoryLimit }}
+  selector:
+    matchLabels:
+      {{- include "etracker-mcp.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "etracker-mcp.selectorLabels" . | nindent 8 }}
+    spec:
+      containers:
+        - name: etracker-mcp
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - containerPort: 3000
+              protocol: TCP
+          env:
+            - name: PORT
+              value: "3000"
+            {{- if .Values.partnerApiKeys }}
+            - name: PARTNER_API_KEYS
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "etracker-mcp.name" . }}
+                  key: PARTNER_API_KEYS
+            {{- end }}
+            {{- if .Values.etrackerReports.pageviews }}
+            - name: ETRACKER_REPORT_PAGEVIEWS
+              value: {{ .Values.etrackerReports.pageviews | quote }}
+            {{- end }}
+            {{- if .Values.etrackerReports.conversions }}
+            - name: ETRACKER_REPORT_CONVERSIONS
+              value: {{ .Values.etrackerReports.conversions | quote }}
+            {{- end }}
+            {{- if .Values.etrackerReports.ad }}
+            - name: ETRACKER_REPORT_AD
+              value: {{ .Values.etrackerReports.ad | quote }}
+            {{- end }}
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 3000
+            initialDelaySeconds: 5
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 3000
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}

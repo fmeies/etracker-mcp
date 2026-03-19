@@ -1,0 +1,9 @@
+.claude
+.vscode
+pyvenv.cfg
+node_modules
+dist
+token.json
+*secret.json
+.env
+my-values.yaml

@@ -1,0 +1,6 @@
+apiVersion: v2
+name: etracker-mcp
+description: MCP Server for etracker Reporting API
+type: application
+version: 0.1.0
+appVersion: "1.0.0"
