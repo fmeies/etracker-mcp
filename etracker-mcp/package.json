@@ -6,7 +6,9 @@
   "scripts": {
     "build": "tsc",
     "start": "node --env-file=.env dist/index.js",
-    "dev": "node --env-file=.env --import tsx/esm src/index.ts"
+    "dev": "node --env-file=.env --import tsx/esm src/index.ts",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "keywords": [],
   "author": "",
@@ -22,6 +24,7 @@
     "@types/node": "^25.5.0",
     "ts-node": "^10.9.2",
     "tsx": "^4.21.0",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.0"
   }
 }
