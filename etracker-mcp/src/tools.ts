@@ -191,8 +191,14 @@ function fetchWithCache(token: string, params: ReportDataParams) {
 
 type ToolContent = { content: Array<{ type: "text"; text: string }> };
 
+const _tokenHashCache = new Map<string, string>();
 function tokenHash(token: string): string {
-  return createHash("sha256").update(token).digest("hex").slice(0, 16);
+  let h = _tokenHashCache.get(token);
+  if (!h) {
+    h = createHash("sha256").update(token).digest("hex").slice(0, 16);
+    _tokenHashCache.set(token, h);
+  }
+  return h;
 }
 
 export function createToolRegistrations(etrackerToken: string): Array<{

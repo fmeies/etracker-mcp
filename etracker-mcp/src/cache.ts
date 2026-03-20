@@ -3,6 +3,7 @@
  */
 
 const TTL_MS = 5 * 60_000;
+const MAX_CACHE_SIZE = 2000;
 
 interface Entry<T> {
   value: T;
@@ -22,6 +23,10 @@ export function cacheGet<T>(key: string): T | undefined {
 }
 
 export function cacheSet<T>(key: string, value: T): void {
+  if (store.size >= MAX_CACHE_SIZE) {
+    // evict oldest entry (Map preserves insertion order)
+    store.delete(store.keys().next().value!);
+  }
   store.set(key, { value, expiresAt: Date.now() + TTL_MS });
 }
 

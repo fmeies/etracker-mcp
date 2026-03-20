@@ -76,7 +76,6 @@ setInterval(() => {
 app.all("/mcp", async (req: AuthenticatedRequest, res) => {
   const sessionId = req.headers["mcp-session-id"] as string | undefined;
 
-  // Existing session
   if (sessionId) {
     const entry = sessions.get(sessionId);
     if (!entry || Date.now() >= entry.expiresAt) {
@@ -110,7 +109,6 @@ app.all("/mcp", async (req: AuthenticatedRequest, res) => {
   const server = createMcpServer(req.etrackerToken!);
   await server.connect(transport);
 
-  // handleRequest sends the response (including Mcp-Session-Id header)
   await transport.handleRequest(req, res, req.body);
 
   // Store after first request so we have the session ID
