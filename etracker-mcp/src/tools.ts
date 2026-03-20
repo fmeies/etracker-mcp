@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { z } from "zod";
 import { cacheGet, cacheSet, makeCacheKey } from "./cache.js";
 import {
@@ -68,7 +69,7 @@ async function resolveColumns(
   }
 
   // Fetch info to fill in defaults
-  const ck = makeCacheKey("report_info", { token, reportId });
+  const ck = makeCacheKey("report_info", { t: tokenHash(token), reportId });
   const info = await withCache(ck, () => getReportInfo(token, reportId));
 
   const attrs = requestedAttributes
@@ -182,13 +183,17 @@ function buildParams(
 }
 
 function fetchWithCache(token: string, params: ReportDataParams) {
-  const ck = makeCacheKey("report_data", { token, ...params as unknown as Record<string, unknown> });
+  const ck = makeCacheKey("report_data", { t: tokenHash(token), ...params as unknown as Record<string, unknown> });
   return withCache(ck, () => getReportData(token, params));
 }
 
 // ── Tool registrations (factory — token bound per session) ────────────────────
 
 type ToolContent = { content: Array<{ type: "text"; text: string }> };
+
+function tokenHash(token: string): string {
+  return createHash("sha256").update(token).digest("hex").slice(0, 16);
+}
 
 export function createToolRegistrations(etrackerToken: string): Array<{
   name: string;
@@ -204,7 +209,7 @@ export function createToolRegistrations(etrackerToken: string): Array<{
         "Lists all available etracker reports for this account. Use this first to discover which report IDs are available (e.g. EAPage, EATime, EAGeo).",
       schema: listReportsShape,
       handler: async () => {
-        const ck = makeCacheKey("list_reports", { etrackerToken });
+        const ck = makeCacheKey("list_reports", { t: tokenHash(etrackerToken) });
         const data = await withCache(ck, () => listReports(etrackerToken));
         return json(data);
       },
@@ -216,7 +221,7 @@ export function createToolRegistrations(etrackerToken: string): Array<{
       schema: getReportInfoShape,
       handler: async (input) => {
         const { report_id } = z.object(getReportInfoShape).parse(input);
-        const ck = makeCacheKey("report_info", { etrackerToken, report_id });
+        const ck = makeCacheKey("report_info", { t: tokenHash(etrackerToken), report_id });
         const data = await withCache(ck, () => getReportInfo(etrackerToken, report_id));
         return json({
           attributes: data.attributes.map((a) => ({ id: a.id, label: a.label })),
@@ -233,7 +238,7 @@ export function createToolRegistrations(etrackerToken: string): Array<{
       schema: getReportMetadataShape,
       handler: async (input) => {
         const { report_id } = z.object(getReportMetadataShape).parse(input);
-        const ck = makeCacheKey("report_metadata", { etrackerToken, report_id });
+        const ck = makeCacheKey("report_metadata", { t: tokenHash(etrackerToken), report_id });
         const data = await withCache(ck, () => getReportMetadata(etrackerToken, report_id));
         return json(data);
       },
