@@ -19,8 +19,8 @@ interface Bucket {
 }
 
 const partnerBuckets = new Map<string, Bucket>();
-let globalBucket: Bucket = { count: 0, resetAt: Date.now() + WINDOW_MS };
-let burstBucket: Bucket = { count: 0, resetAt: Date.now() + BURST_WINDOW_MS };
+const globalBucket: Bucket = { count: 0, resetAt: Date.now() + WINDOW_MS };
+const burstBucket: Bucket = { count: 0, resetAt: Date.now() + BURST_WINDOW_MS };
 
 function refreshBucket(bucket: Bucket, windowMs: number): Bucket {
   if (Date.now() >= bucket.resetAt) {
