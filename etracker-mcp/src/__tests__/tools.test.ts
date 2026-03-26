@@ -9,7 +9,7 @@ vi.mock("../analytics-api.js", () => ({
   getReportMetadata: vi.fn(),
   getReportData: vi.fn(),
   pageviewsReportId: () => "EATime",
-  conversionsReportId: () => "EAConversion",
+  conversionsReportId: () => "EAConversions",
   adReportId: () => "EAMarketing",
 }));
 

@@ -24,7 +24,7 @@ An MCP (Model Context Protocol) server that exposes the etracker analytics API t
 | `get_report_info` | Returns available attributes and key figures for a report |
 | `get_report_metadata` | Returns raw column definitions (types, sortable, filterable flags) |
 | `get_pageviews` | Web analytics data (default report: EATime) |
-| `get_conversions` | Conversion and e-commerce data (default report: EAConversion) |
+| `get_conversions` | Conversion and e-commerce data (default report: EAConversions) |
 | `get_ad_performance` | Marketing/ad channel performance (default report: EAMarketing) |
 | `get_report_data` | Generic tool — fetch data from any report with filters |
 | `compare_periods` | Compare a metric between two date ranges |
@@ -105,7 +105,7 @@ ingress:
 | `ingress.host` | `etracker-mcp.example.com` | Ingress hostname |
 | `ingress.tls` | `false` | Enable TLS |
 | `etrackerReports.pageviews` | `EATime` | Override default pageviews report ID |
-| `etrackerReports.conversions` | `EAConversion` | Override default conversions report ID |
+| `etrackerReports.conversions` | `EAConversions` | Override default conversions report ID |
 | `etrackerReports.ad` | `EAMarketing` | Override default ad report ID |
 | `resources.requests.cpu` | `100m` | CPU request |
 | `resources.requests.memory` | `128Mi` | Memory request |

@@ -46,7 +46,7 @@ helm install etracker-mcp ./etracker-mcp-helm -f my-values.yaml
 | `PARTNER_API_KEYS` | yes | JSON object: `{"<key>":"<partner-id>"}` — generate keys with `openssl rand -hex 32` |
 | `PORT` | no | HTTP port (default: 3000) |
 | `ETRACKER_REPORT_PAGEVIEWS` | no | Override default pageviews report ID (default: `EATime`) |
-| `ETRACKER_REPORT_CONVERSIONS` | no | Override default conversions report ID (default: `EAConversion`) |
+| `ETRACKER_REPORT_CONVERSIONS` | no | Override default conversions report ID (default: `EAConversions`) |
 | `ETRACKER_REPORT_AD` | no | Override default ad report ID (default: `EAMarketing`) |
 
 Copy `.env.example` to `.env` for local development. The etracker token is **not** stored in env — partners pass it per request via `X-ET-Token`.
@@ -78,7 +78,7 @@ All data tools enforce max 90-day date range and max 5 attributes + 5 figures pe
 | `get_report_info` | Attributes and figures for a report (use before querying) |
 | `get_report_metadata` | Raw column definitions (types, sortable, filterable flags) |
 | `get_pageviews` | Web analytics data (default: `EATime`) |
-| `get_conversions` | Conversion / e-commerce data (default: `EAConversion`) |
+| `get_conversions` | Conversion / e-commerce data (default: `EAConversions`) |
 | `get_ad_performance` | Marketing / ad channel data (default: `EAMarketing`) |
 | `get_report_data` | Generic — any report, with attribute/keyfigure filters |
 | `compare_periods` | Compares a metric column between two date ranges (delta + %) |

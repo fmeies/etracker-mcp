@@ -7,7 +7,7 @@
  *
  * Optional env vars (report IDs — override defaults per account):
  *   ETRACKER_REPORT_PAGEVIEWS    (default: EATime)
- *   ETRACKER_REPORT_CONVERSIONS  (default: EAConversion)
+ *   ETRACKER_REPORT_CONVERSIONS  (default: EAConversions)
  *   ETRACKER_REPORT_AD           (default: EAMarketing)
  */
 
@@ -156,7 +156,7 @@ export function pageviewsReportId(): string {
 }
 
 export function conversionsReportId(): string {
-  return reportId("ETRACKER_REPORT_CONVERSIONS", "EAConversion");
+  return reportId("ETRACKER_REPORT_CONVERSIONS", "EAConversions");
 }
 
 export function adReportId(): string {
