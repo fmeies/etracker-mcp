@@ -1,0 +1,20 @@
+services:
+    etracker-mcp:
+      image: ${IMAGE}
+      ports:
+        - "${PORT}:${PORT}"
+      environment:
+        NODE_ENV: production
+        PORT: ${PORT}
+        PARTNER_API_KEYS: ${PARTNER_API_KEYS}
+        # Optional:
+        # ETRACKER_REPORT_PAGEVIEWS: EATime
+        # ETRACKER_REPORT_CONVERSIONS: EAConversions
+        # ETRACKER_REPORT_AD: EAMarketing
+      healthcheck:
+        test: ["CMD", "sh", "-c", "wget -qO- http://localhost:${PORT}/health"]
+        interval: 15s
+        timeout: 5s
+        start_period: 5s
+        retries: 3
+      restart: unless-stopped

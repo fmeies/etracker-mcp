@@ -6,12 +6,12 @@ image:
   pullPolicy: IfNotPresent
 
 service:
-  type: ClusterIP
+  type: NodePort
   port: 80
   targetPort: 3000
   # Set type: NodePort and a nodePort value (30000-32767) for direct access
   # without an ingress controller. On Docker Desktop use localhost:<nodePort>.
-  nodePort: ""
+  nodePort: 30300
   # Session affinity ensures a client always hits the same pod (required for
   # in-memory MCP sessions). Increase sessionAffinityTimeoutSeconds if your
   # clients hold long-running sessions.
@@ -33,7 +33,7 @@ partnerApiKeys: ""
 # Optional etracker report ID overrides
 etrackerReports:
   pageviews: ""    # default: EATime
-  conversions: ""  # default: EAConversion
+  conversions: ""  # default: EAConversions
   ad: ""           # default: EAMarketing
 
 resources:

@@ -10,6 +10,8 @@ import {
   conversionsReportId,
   adReportId,
   type ReportDataParams,
+  type AttributeFilter,
+  type KeyfigureFilter,
 } from "./analytics-api.js";
 
 const MAX_DAYS = 90;
@@ -39,6 +41,14 @@ async function withCache<T>(key: string, fn: () => Promise<T>): Promise<T> {
   return result;
 }
 
+function parseJson(value: string, field: string): unknown {
+  try {
+    return JSON.parse(value);
+  } catch {
+    throw new Error(`Invalid JSON in ${field}`);
+  }
+}
+
 function json(data: unknown) {
   return { content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }] };
 }
@@ -60,12 +70,10 @@ async function resolveColumns(
   }
 
   if (requestedAttributes && requestedFigures) {
-    const attrs = splitAndLimit(requestedAttributes);
-    const figs = splitAndLimit(requestedFigures);
-    if (attrs.length > MAX_COLUMNS || figs.length > MAX_COLUMNS) {
-      throw new Error(`Maximum ${MAX_COLUMNS} attributes and ${MAX_COLUMNS} figures allowed per query.`);
-    }
-    return { attributes: attrs.join(","), figures: figs.join(",") };
+    return {
+      attributes: splitAndLimit(requestedAttributes).join(","),
+      figures: splitAndLimit(requestedFigures).join(","),
+    };
   }
 
   // Fetch info to fill in defaults
@@ -177,8 +185,8 @@ function buildParams(
     offset: args.offset,
     sortColumn: args.sort_column,
     sortOrder: args.sort_order === "asc" ? "2" : args.sort_order === "desc" ? "1" : undefined,
-    attributeFilter: args.attribute_filter ? JSON.parse(args.attribute_filter) : undefined,
-    keyfigureFilter: args.keyfigure_filter ? JSON.parse(args.keyfigure_filter) : undefined,
+    attributeFilter: args.attribute_filter ? parseJson(args.attribute_filter, "attribute_filter") as AttributeFilter[] : undefined,
+    keyfigureFilter: args.keyfigure_filter ? parseJson(args.keyfigure_filter, "keyfigure_filter") as KeyfigureFilter[] : undefined,
   };
 }
 

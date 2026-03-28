@@ -2,13 +2,13 @@
  * etracker Reporting API client
  * Docs: https://docs.etracker.com/api/report.html
  *
- * Required env vars:
- *   ETRACKER_API_TOKEN  — account API token with "Reporting API" scope
- *
  * Optional env vars (report IDs — override defaults per account):
  *   ETRACKER_REPORT_PAGEVIEWS    (default: EATime)
  *   ETRACKER_REPORT_CONVERSIONS  (default: EAConversions)
  *   ETRACKER_REPORT_AD           (default: EAMarketing)
+ *
+ * The etracker account token is not stored here — it is passed per request
+ * via the X-ET-Token header and forwarded directly to the API.
  */
 
 const BASE_URL = "https://ws.etracker.com/api/v7";
@@ -26,6 +26,7 @@ async function etrackerFetch<T>(token: string, path: string, params?: Record<str
       "X-ET-Token": token,
       Accept: "application/json",
     },
+    signal: AbortSignal.timeout(10_000),
   });
 
   if (!res.ok) {

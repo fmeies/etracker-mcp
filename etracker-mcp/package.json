@@ -4,7 +4,8 @@
   "description": "",
   "main": "dist/index.js",
   "scripts": {
-    "build": "tsc",
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
     "start": "node --env-file=.env dist/index.js",
     "dev": "node --env-file=.env --import tsx/esm src/index.ts",
     "test": "vitest run",

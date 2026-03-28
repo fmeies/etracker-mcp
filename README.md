@@ -62,6 +62,15 @@ docker run -p 3000:3000 \
   etracker-mcp
 ```
 
+## Docker Compose
+
+```bash
+cd etracker-mcp
+cp .env.example .env
+# Edit .env: set PARTNER_API_KEYS and IMAGE
+docker compose up -d
+```
+
 ## Kubernetes / Helm
 
 **Do not use `--set` for `partnerApiKeys`** — Helm interprets `{`, `}`, and `,` as special syntax and corrupts the JSON. Use a values file instead:
@@ -98,8 +107,8 @@ ingress:
 | `replicaCount` | `1` | Number of replicas (session affinity handles routing) |
 | `image.repository` | `etracker-mcp` | Container image |
 | `image.tag` | `latest` | Image tag |
-| `service.type` | `ClusterIP` | Service type |
-| `service.nodePort` | `""` | NodePort value (30000–32767) |
+| `service.type` | `NodePort` | Service type |
+| `service.nodePort` | `30300` | NodePort value (30000–32767) |
 | `service.sessionAffinityTimeoutSeconds` | `3600` | Session stickiness timeout |
 | `ingress.enabled` | `false` | Enable ingress |
 | `ingress.host` | `etracker-mcp.example.com` | Ingress hostname |

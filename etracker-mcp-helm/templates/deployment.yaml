@@ -20,11 +20,11 @@ spec:
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           ports:
-            - containerPort: 3000
+            - containerPort: {{ .Values.service.targetPort }}
               protocol: TCP
           env:
             - name: PORT
-              value: "3000"
+              value: {{ .Values.service.targetPort | quote }}
             {{- if .Values.partnerApiKeys }}
             - name: PARTNER_API_KEYS
               valueFrom:
@@ -47,13 +47,13 @@ spec:
           livenessProbe:
             httpGet:
               path: /health
-              port: 3000
+              port: {{ .Values.service.targetPort }}
             initialDelaySeconds: 5
             periodSeconds: 15
           readinessProbe:
             httpGet:
               path: /health
-              port: 3000
+              port: {{ .Values.service.targetPort }}
             initialDelaySeconds: 3
             periodSeconds: 10
           resources:
