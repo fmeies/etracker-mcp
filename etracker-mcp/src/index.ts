@@ -43,9 +43,9 @@ app.use((req: AuthenticatedRequest, res, next) => {
 
 // ── MCP Server factory ────────────────────────────────────────────────────────
 
-function createMcpServer(etrackerToken: string): McpServer {
+function createMcpServer(etrackerToken: string, apiKey: string): McpServer {
   const server = new McpServer({ name: "etracker-mcp", version: "1.0.0" });
-  for (const { name, description, schema, handler } of createToolRegistrations(etrackerToken)) {
+  for (const { name, description, schema, handler } of createToolRegistrations(etrackerToken, () => checkRateLimit(apiKey))) {
     server.tool(name, description, schema, handler);
   }
   return server;
@@ -62,6 +62,7 @@ interface SessionEntry {
 }
 
 const sessions = new Map<string, SessionEntry>();
+let pendingSessions = 0;
 
 // Periodically evict expired sessions to prevent unbounded growth
 setInterval(() => {
@@ -83,6 +84,7 @@ app.all("/mcp", async (req: AuthenticatedRequest, res) => {
       res.status(404).json({ error: "Session not found or expired" });
       return;
     }
+    entry.expiresAt = Date.now() + SESSION_TTL_MS; // refresh TTL on activity
     await entry.transport.handleRequest(req, res, req.body);
     return;
   }
@@ -93,28 +95,34 @@ app.all("/mcp", async (req: AuthenticatedRequest, res) => {
     return;
   }
 
-  if (sessions.size >= MAX_SESSIONS) {
+  // Reserve slot synchronously to prevent TOCTOU race at capacity boundary
+  if (sessions.size + pendingSessions >= MAX_SESSIONS) {
     res.status(503).json({ error: "Server at session capacity, try again later" });
     return;
   }
+  pendingSessions++;
 
-  const transport = new StreamableHTTPServerTransport({
-    sessionIdGenerator: () => randomUUID(),
-  });
+  try {
+    const transport = new StreamableHTTPServerTransport({
+      sessionIdGenerator: () => randomUUID(),
+    });
 
-  transport.onclose = () => {
-    if (transport.sessionId) sessions.delete(transport.sessionId);
-  };
+    transport.onclose = () => {
+      if (transport.sessionId) sessions.delete(transport.sessionId);
+    };
 
-  const server = createMcpServer(req.etrackerToken!);
-  await server.connect(transport);
+    const server = createMcpServer(req.etrackerToken!, req.apiKey!);
+    await server.connect(transport);
 
-  await transport.handleRequest(req, res, req.body);
+    await transport.handleRequest(req, res, req.body);
 
-  // Store after first request so we have the session ID
-  if (transport.sessionId) {
-    sessions.set(transport.sessionId, { transport, expiresAt: Date.now() + SESSION_TTL_MS });
-    console.log(`[${req.partnerId}] session opened: ${transport.sessionId}`);
+    // Store after first request so we have the session ID
+    if (transport.sessionId) {
+      sessions.set(transport.sessionId, { transport, expiresAt: Date.now() + SESSION_TTL_MS });
+      console.log(`[${req.partnerId}] session opened: ${transport.sessionId}`);
+    }
+  } finally {
+    pendingSessions--;
   }
 });
 

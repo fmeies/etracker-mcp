@@ -77,7 +77,7 @@ async function resolveColumns(
   }
 
   // Fetch info to fill in defaults
-  const ck = makeCacheKey("report_info", { t: tokenHash(token), reportId });
+  const ck = makeCacheKey("report_info", { t: tokenHash(token), report_id: reportId });
   const info = await withCache(ck, () => getReportInfo(token, reportId));
 
   const attrs = requestedAttributes
@@ -111,7 +111,7 @@ const columnsShape = {
 };
 
 const paginationShape = {
-  limit: z.number().int().min(1).max(10000).optional().describe("Max rows to return (default: all, max 100,000)"),
+  limit: z.number().int().min(1).max(10000).optional().describe("Max rows to return (default: all, max 10,000)"),
   offset: z.number().int().min(0).optional().describe("Pagination offset"),
 };
 
@@ -199,17 +199,24 @@ function fetchWithCache(token: string, params: ReportDataParams) {
 
 type ToolContent = { content: Array<{ type: "text"; text: string }> };
 
+const TOKEN_HASH_CACHE_MAX = 1000;
 const _tokenHashCache = new Map<string, string>();
 function tokenHash(token: string): string {
   let h = _tokenHashCache.get(token);
   if (!h) {
     h = createHash("sha256").update(token).digest("hex").slice(0, 16);
+    if (_tokenHashCache.size >= TOKEN_HASH_CACHE_MAX) {
+      _tokenHashCache.delete(_tokenHashCache.keys().next().value!);
+    }
     _tokenHashCache.set(token, h);
   }
   return h;
 }
 
-export function createToolRegistrations(etrackerToken: string): Array<{
+export function createToolRegistrations(
+  etrackerToken: string,
+  consumeRateSlot: () => { allowed: boolean; retryAfterMs: number }
+): Array<{
   name: string;
   description: string;
   schema: Record<string, z.ZodTypeAny>;
@@ -321,6 +328,12 @@ export function createToolRegistrations(etrackerToken: string): Array<{
         parseDateRange(args.period_a_from, args.period_a_to);
         parseDateRange(args.period_b_from, args.period_b_to);
 
+        // compare_periods makes two upstream API calls — consume an extra rate limit slot
+        const extra = consumeRateSlot();
+        if (!extra.allowed) {
+          throw new Error(`Rate limit exceeded. Retry after ${Math.ceil(extra.retryAfterMs / 1000)}s.`);
+        }
+
         const reportIdToUse = args.report_id ?? pageviewsReportId();
         const cols = await resolveColumns(etrackerToken, reportIdToUse, args.attributes, args.figures);
 
@@ -332,6 +345,11 @@ export function createToolRegistrations(etrackerToken: string): Array<{
             from: args.period_b_from, to: args.period_b_to, ...cols,
           })),
         ]);
+
+        const allRows = [...dataA, ...dataB];
+        if (allRows.length > 0 && !allRows.some(r => args.metric_column in r)) {
+          throw new Error(`Column "${args.metric_column}" not found in report results. Use get_report_info to discover available figure IDs.`);
+        }
 
         function sumColumn(rows: typeof dataA, col: string): number {
           return rows.reduce((acc, row) => {

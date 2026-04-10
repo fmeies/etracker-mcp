@@ -31,7 +31,8 @@ async function etrackerFetch<T>(token: string, path: string, params?: Record<str
 
   if (!res.ok) {
     const body = await res.text();
-    throw new Error(`etracker API error ${res.status} ${res.statusText}: ${body}`);
+    console.error(`[etracker] ${res.status} ${res.statusText} — ${path}: ${body}`);
+    throw new Error(`etracker API error ${res.status} (${res.statusText})`);
   }
 
   return res.json() as Promise<T>;
@@ -122,7 +123,8 @@ export async function listReports(token: string): Promise<ReportListItem[]> {
 /** Returns attributes and figures available for a report. */
 export async function getReportInfo(token: string, reportId: string): Promise<ReportInfoResponse> {
   const result = await etrackerFetch<ReportInfoResponse[]>(token, `/report/${encodeURIComponent(reportId)}/info`);
-  return result[0]!;
+  if (!result[0]) throw new Error(`No info returned for report "${reportId}". Use list_reports to verify it exists.`);
+  return result[0];
 }
 
 /** Returns column/metric definitions for a report. */
