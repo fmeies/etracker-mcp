@@ -2,7 +2,7 @@ services:
     etracker-mcp:
       image: ${IMAGE}
       ports:
-        - "${PORT}:${PORT}"
+        - "127.0.0.1:${PORT}:${PORT}"
       environment:
         NODE_ENV: production
         PORT: ${PORT}
