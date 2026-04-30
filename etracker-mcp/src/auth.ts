@@ -10,6 +10,7 @@
  */
 
 import type { Request, Response, NextFunction } from "express";
+import { logger } from "./logger.js";
 
 export interface AuthenticatedRequest extends Request {
   partnerId?: string;
@@ -24,7 +25,7 @@ function loadKeys(): Map<string, string> {
     const obj = JSON.parse(raw) as Record<string, string>;
     return new Map(Object.entries(obj));
   } catch {
-    console.error("PARTNER_API_KEYS is not valid JSON");
+    logger.error("PARTNER_API_KEYS is not valid JSON");
     return new Map();
   }
 }
@@ -40,6 +41,7 @@ export function authMiddleware(
   const key = Array.isArray(apiKeyHeader) ? apiKeyHeader[0] : apiKeyHeader;
 
   if (!key || !KEYS.has(key)) {
+    logger.warn("auth failed", { reason: "invalid or missing api key", path: req.path });
     res.status(401).json({ error: "Unauthorized: invalid or missing X-Api-Key" });
     return;
   }
@@ -48,6 +50,7 @@ export function authMiddleware(
   const etToken = Array.isArray(etHeader) ? etHeader[0] : etHeader;
 
   if (!etToken) {
+    logger.warn("auth failed", { reason: "missing et token", partner: KEYS.get(key), path: req.path });
     res.status(401).json({ error: "Unauthorized: missing X-ET-Token" });
     return;
   }

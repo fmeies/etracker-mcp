@@ -6,6 +6,7 @@ import { authMiddleware } from "./auth.js";
 import type { AuthenticatedRequest } from "./auth.js";
 import { checkRateLimit } from "./ratelimit.js";
 import { createToolRegistrations } from "./tools.js";
+import { logger } from "./logger.js";
 
 const PORT = parseInt(process.env.PORT ?? "3000", 10);
 
@@ -13,6 +14,22 @@ const PORT = parseInt(process.env.PORT ?? "3000", 10);
 
 const app = express();
 app.use(express.json({ limit: "100kb" }));
+
+// Request logging — runs for every request including health and auth failures
+app.use((req, res, next) => {
+  const start = Date.now();
+  res.on("finish", () => {
+    const authed = req as AuthenticatedRequest;
+    logger.info("request", {
+      method: req.method,
+      path: req.path,
+      status: res.statusCode,
+      duration_ms: Date.now() - start,
+      partner: authed.partnerId ?? "unauthenticated",
+    });
+  });
+  next();
+});
 
 // Health check (no auth required)
 app.get("/health", (_req, res) => {
@@ -31,11 +48,10 @@ app.use((req: AuthenticatedRequest, _res, next) => {
 app.use((req: AuthenticatedRequest, res, next) => {
   const { allowed, retryAfterMs } = checkRateLimit(req.apiKey!);
   if (!allowed) {
-    res.setHeader("Retry-After", Math.ceil(retryAfterMs / 1000).toString());
-    res.status(429).json({
-      error: "Rate limit exceeded",
-      retry_after_s: Math.ceil(retryAfterMs / 1000),
-    });
+    const retryAfterS = Math.ceil(retryAfterMs / 1000);
+    logger.warn("rate limit exceeded", { partner: req.partnerId, retry_after_s: retryAfterS });
+    res.setHeader("Retry-After", retryAfterS.toString());
+    res.status(429).json({ error: "Rate limit exceeded", retry_after_s: retryAfterS });
     return;
   }
   next();
@@ -67,9 +83,11 @@ let pendingSessions = 0;
 // Periodically evict expired sessions to prevent unbounded growth
 setInterval(() => {
   const now = Date.now();
+  let evicted = 0;
   for (const [id, entry] of sessions) {
-    if (now >= entry.expiresAt) sessions.delete(id);
+    if (now >= entry.expiresAt) { sessions.delete(id); evicted++; }
   }
+  if (evicted > 0) logger.debug("sessions evicted", { count: evicted });
 }, 5 * 60_000);
 
 // ── Single /mcp endpoint (StreamableHTTP) ────────────────────────────────────
@@ -81,6 +99,7 @@ app.all("/mcp", async (req: AuthenticatedRequest, res) => {
     const entry = sessions.get(sessionId);
     if (!entry || Date.now() >= entry.expiresAt) {
       if (entry) sessions.delete(sessionId);
+      logger.debug("session not found or expired", { session: sessionId });
       res.status(404).json({ error: "Session not found or expired" });
       return;
     }
@@ -97,6 +116,7 @@ app.all("/mcp", async (req: AuthenticatedRequest, res) => {
 
   // Reserve slot synchronously to prevent TOCTOU race at capacity boundary
   if (sessions.size + pendingSessions >= MAX_SESSIONS) {
+    logger.warn("session capacity reached", { current: sessions.size });
     res.status(503).json({ error: "Server at session capacity, try again later" });
     return;
   }
@@ -108,7 +128,10 @@ app.all("/mcp", async (req: AuthenticatedRequest, res) => {
     });
 
     transport.onclose = () => {
-      if (transport.sessionId) sessions.delete(transport.sessionId);
+      if (transport.sessionId) {
+        sessions.delete(transport.sessionId);
+        logger.debug("session closed", { session: transport.sessionId });
+      }
     };
 
     const server = createMcpServer(req.etrackerToken!, req.apiKey!);
@@ -119,7 +142,7 @@ app.all("/mcp", async (req: AuthenticatedRequest, res) => {
     // Store after first request so we have the session ID
     if (transport.sessionId) {
       sessions.set(transport.sessionId, { transport, expiresAt: Date.now() + SESSION_TTL_MS });
-      console.log(`[${req.partnerId}] session opened: ${transport.sessionId}`);
+      logger.info("session opened", { partner: req.partnerId, session: transport.sessionId });
     }
   } finally {
     pendingSessions--;
@@ -129,7 +152,5 @@ app.all("/mcp", async (req: AuthenticatedRequest, res) => {
 // ── Start ─────────────────────────────────────────────────────────────────────
 
 app.listen(PORT, () => {
-  console.log(`etracker MCP server running on http://localhost:${PORT}`);
-  console.log(`  MCP endpoint:   ALL /mcp`);
-  console.log(`  Health check:   GET /health`);
+  logger.info("server started", { port: PORT, mcp: "/mcp", health: "/health" });
 });

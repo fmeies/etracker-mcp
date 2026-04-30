@@ -11,6 +11,8 @@
  * via the X-ET-Token header and forwarded directly to the API.
  */
 
+import { logger } from "./logger.js";
+
 const BASE_URL = "https://ws.etracker.com/api/v7";
 
 async function etrackerFetch<T>(token: string, path: string, params?: Record<string, string>): Promise<T> {
@@ -20,6 +22,9 @@ async function etrackerFetch<T>(token: string, path: string, params?: Record<str
       if (v !== undefined && v !== "") url.searchParams.set(k, v);
     }
   }
+
+  const start = Date.now();
+  logger.debug("etracker api call", { path });
 
   const res = await fetch(url.toString(), {
     headers: {
@@ -31,10 +36,11 @@ async function etrackerFetch<T>(token: string, path: string, params?: Record<str
 
   if (!res.ok) {
     const body = await res.text();
-    console.error(`[etracker] ${res.status} ${res.statusText} — ${path}: ${body}`);
-    throw new Error(`etracker API error ${res.status} (${res.statusText})`);
+    logger.error("etracker api error", { path, status: res.status, duration_ms: Date.now() - start });
+    throw new Error(`etracker API error ${res.status} ${res.statusText}: ${body}`);
   }
 
+  logger.debug("etracker api response", { path, status: res.status, duration_ms: Date.now() - start });
   return res.json() as Promise<T>;
 }
 
