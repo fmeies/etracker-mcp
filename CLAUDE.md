@@ -3,7 +3,7 @@
 ## Project structure
 
 ```
-etracker-mcp/          # Node.js/TypeScript MCP server
+etracker-mcp/          # repo root — Node.js/TypeScript MCP server
   src/
     index.ts           # Express app, session store, /mcp + /health endpoints
     auth.ts            # authMiddleware — X-Api-Key + X-ET-Token headers
@@ -11,16 +11,16 @@ etracker-mcp/          # Node.js/TypeScript MCP server
     cache.ts           # In-memory TTL cache (5 min), cache keys scoped per token
     analytics-api.ts   # etracker Reporting API client (BASE_URL: ws.etracker.com/api/v7)
     tools.ts           # MCP tool registrations, Zod schemas, column resolution
+  helm/                # Helm chart for Kubernetes deployment
+    values.yaml
   Dockerfile           # Multi-stage build, node:24-alpine
-etracker-mcp-helm/     # Helm chart for Kubernetes deployment
-  values.yaml
 ```
 
 ## Commands
 
 ```bash
 # Install
-cd etracker-mcp && npm install
+npm install
 
 # Dev (tsx, hot-reload via node --import tsx/esm)
 npm run dev
@@ -32,11 +32,11 @@ npm run build        # tsc → dist/
 npm start            # node --env-file=.env dist/index.js
 
 # Docker
-docker build -t etracker-mcp ./etracker-mcp
+docker build -t etracker-mcp .
 docker run -p 3000:3000 -e PARTNER_API_KEYS='{"key":"partner-a"}' etracker-mcp
 
 # Helm
-helm install etracker-mcp ./etracker-mcp-helm -f my-values.yaml
+helm install etracker-mcp ./helm -f my-values.yaml
 ```
 
 ## Environment variables

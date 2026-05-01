@@ -48,15 +48,15 @@ openssl rand -hex 32
 ## Local development
 
 ```bash
-cp etracker-mcp/.env.example etracker-mcp/.env
+cp .env.example .env
 # Edit .env and set PARTNER_API_KEYS
-cd etracker-mcp && npm install && npm run dev
+npm install && npm run dev
 ```
 
 ## Docker
 
 ```bash
-docker build -t etracker-mcp ./etracker-mcp
+docker build -t etracker-mcp .
 docker run -p 3000:3000 \
   -e PARTNER_API_KEYS='{"mykey":"partner-a"}' \
   etracker-mcp
@@ -65,7 +65,6 @@ docker run -p 3000:3000 \
 ## Docker Compose
 
 ```bash
-cd etracker-mcp
 cp .env.example .env
 # Edit .env: set PARTNER_API_KEYS and IMAGE
 docker compose up -d
@@ -83,7 +82,7 @@ service:
 ```
 
 ```bash
-helm install etracker-mcp ./etracker-mcp-helm -f my-values.yaml
+helm install etracker-mcp ./helm -f my-values.yaml
 ```
 
 ### Ingress
