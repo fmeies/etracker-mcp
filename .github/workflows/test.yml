@@ -21,6 +21,6 @@ jobs:
           cache: npm
           cache-dependency-path: etracker-mcp/package-lock.json
 
-      - run: npm ci
+      - run: npm install
 
       - run: npm test
