@@ -69,4 +69,11 @@ describe("makeCacheKey", () => {
     const k2 = makeCacheKey("tool", { t: "abc", reportId: "EAPage" });
     expect(k1).not.toBe(k2);
   });
+
+  it("produces different keys for different nested filter values", async () => {
+    const { makeCacheKey } = await import("../cache.js");
+    const k1 = makeCacheKey("tool", { reportId: "EATime", attributeFilter: [{ attributeId: "page", input: "/shop" }] });
+    const k2 = makeCacheKey("tool", { reportId: "EATime", attributeFilter: [{ attributeId: "page", input: "/blog" }] });
+    expect(k1).not.toBe(k2);
+  });
 });

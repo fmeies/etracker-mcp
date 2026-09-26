@@ -31,5 +31,7 @@ export function cacheSet<T>(key: string, value: T): void {
 }
 
 export function makeCacheKey(tool: string, params: Record<string, unknown>): string {
-  return `${tool}:${JSON.stringify(params, Object.keys(params).sort())}`;
+  // A replacer array would also whitelist nested keys and drop filter contents, so sort the entries instead
+  const sortedParams = Object.fromEntries(Object.entries(params).sort(([a], [b]) => a.localeCompare(b)));
+  return `${tool}:${JSON.stringify(sortedParams)}`;
 }
