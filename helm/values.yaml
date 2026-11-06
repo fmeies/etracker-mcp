@@ -12,11 +12,6 @@ service:
   # Set type: NodePort and a nodePort value (30000-32767) for direct access
   # without an ingress controller. On Docker Desktop use localhost:<nodePort>.
   nodePort: 30300
-  # Session affinity ensures a client always hits the same pod (required for
-  # in-memory MCP sessions). Increase sessionAffinityTimeoutSeconds if your
-  # clients hold long-running sessions.
-  sessionAffinity: ClientIP
-  sessionAffinityTimeoutSeconds: 3600
 
 ingress:
   enabled: false

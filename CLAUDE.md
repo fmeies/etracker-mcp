@@ -5,7 +5,7 @@
 ```
 etracker-mcp/          # repo root — Node.js/TypeScript MCP server
   src/
-    index.ts           # Express app, session store, /mcp + /health endpoints
+    index.ts           # Express app, /mcp (stateless) + /health endpoints
     auth.ts            # authMiddleware — X-Auth-Token + X-Api-Key headers
     ratelimit.ts       # Three-layer bucket rate limiter (burst / global / per-partner)
     cache.ts           # In-memory TTL cache (5 min), cache keys scoped per token
@@ -87,7 +87,7 @@ All data tools enforce max 90-day date range and max 5 attributes + 5 figures pe
 
 ## Sessions
 
-MCP sessions are in-memory (`Map<sessionId, StreamableHTTPServerTransport>`). Each partner gets a fresh `McpServer` instance (with their token bound) per session. When running multiple Kubernetes replicas, session affinity (`ClientIP`) is required — configured in the Helm chart.
+The `/mcp` endpoint is stateless: every request gets a fresh `StreamableHTTPServerTransport` (`sessionIdGenerator: undefined`) and a fresh `McpServer` instance with the caller's token bound, then both are closed once the response finishes. No session ID, no SSE push, no server-side session store — any replica can handle any request, so no session affinity is needed.
 
 ## Caching
 
@@ -96,4 +96,3 @@ MCP sessions are in-memory (`Map<sessionId, StreamableHTTPServerTransport>`). Ea
 ## Helm notes
 
 - Never use `--set` for `partnerApiKeys` — Helm treats `{`, `}`, `,` as special syntax. Always use `-f my-values.yaml`.
-- Session affinity (`ClientIP`) is enabled by default; increase `sessionAffinityTimeoutSeconds` for long-running sessions.

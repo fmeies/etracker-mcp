@@ -7,7 +7,7 @@ An MCP (Model Context Protocol) server that exposes the etracker analytics API t
 - **Transport:** StreamableHTTP (MCP over HTTP + SSE)
 - **Auth:** Two-header scheme — `X-Auth-Token` (partner key) + `X-Api-Key` (etracker account token, forwarded upstream as `X-ET-Token`)
 - **Rate limiting:** Three-layer bucket — burst guard (8 req/10 s), global window (40 req/5 min), per-partner window (20 req/5 min)
-- **Sessions:** In-memory, scoped per MCP session. Session affinity (ClientIP) required when running multiple replicas.
+- **Sessions:** Stateless — every request gets a fresh transport + `McpServer`, no session affinity needed across replicas.
 
 ## Endpoints
 
@@ -105,12 +105,11 @@ ingress:
 | Value | Default | Description |
 |-------|---------|-------------|
 | `partnerApiKeys` | `""` | JSON object mapping API keys to partner IDs |
-| `replicaCount` | `1` | Number of replicas (session affinity handles routing) |
+| `replicaCount` | `1` | Number of replicas (server is stateless, any pod handles any request) |
 | `image.repository` | `etracker-mcp` | Container image |
 | `image.tag` | `latest` | Image tag |
 | `service.type` | `NodePort` | Service type |
 | `service.nodePort` | `30300` | NodePort value (30000–32767) |
-| `service.sessionAffinityTimeoutSeconds` | `3600` | Session stickiness timeout |
 | `ingress.enabled` | `false` | Enable ingress |
 | `ingress.host` | `etracker-mcp.example.com` | Ingress hostname |
 | `ingress.tls` | `false` | Enable TLS |

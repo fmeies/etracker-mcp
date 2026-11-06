@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import express from "express";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
@@ -67,86 +66,31 @@ function createMcpServer(etrackerToken: string, apiKey: string): McpServer {
   return server;
 }
 
-// ── Session store ─────────────────────────────────────────────────────────────
+// ── /mcp endpoint (StreamableHTTP, stateless) ────────────────────────────────
+//
+// Every request gets a fresh transport + McpServer — no session ID, no SSE
+// push, no server-side state to track. All of this project's tools are plain
+// request/response calls into etracker's API, so there's nothing to gain from
+// holding a connection open, and dropping it removes the need for session
+// affinity when running multiple replicas.
 
-const MAX_SESSIONS = 500;
-const SESSION_TTL_MS = 60 * 60_000; // 1 hour
+app.post("/mcp", async (req: AuthenticatedRequest, res) => {
+  const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
+  const server = createMcpServer(req.etrackerToken!, req.apiKey!);
+  res.on("close", () => {
+    transport.close();
+    server.close();
+  });
+  await server.connect(transport);
+  await transport.handleRequest(req, res, req.body);
+});
 
-interface SessionEntry {
-  transport: StreamableHTTPServerTransport;
-  expiresAt: number;
-}
+app.get("/mcp", (_req, res) => {
+  res.status(405).json({ error: "Method not allowed: this server is stateless, no SSE stream to subscribe to" });
+});
 
-const sessions = new Map<string, SessionEntry>();
-let pendingSessions = 0;
-
-// Periodically evict expired sessions to prevent unbounded growth
-setInterval(() => {
-  const now = Date.now();
-  let evicted = 0;
-  for (const [id, entry] of sessions) {
-    if (now >= entry.expiresAt) { sessions.delete(id); evicted++; }
-  }
-  if (evicted > 0) logger.debug("sessions evicted", { count: evicted });
-}, 5 * 60_000);
-
-// ── Single /mcp endpoint (StreamableHTTP) ────────────────────────────────────
-
-app.all("/mcp", async (req: AuthenticatedRequest, res) => {
-  const sessionId = req.headers["mcp-session-id"] as string | undefined;
-
-  if (sessionId) {
-    const entry = sessions.get(sessionId);
-    if (!entry || Date.now() >= entry.expiresAt) {
-      if (entry) sessions.delete(sessionId);
-      logger.debug("session not found or expired", { session: sessionId });
-      res.status(404).json({ error: "Session not found or expired" });
-      return;
-    }
-    entry.expiresAt = Date.now() + SESSION_TTL_MS; // refresh TTL on activity
-    await entry.transport.handleRequest(req, res, req.body);
-    return;
-  }
-
-  // New session — only POST (initialize) is valid without a session ID
-  if (req.method !== "POST") {
-    res.status(400).json({ error: "Send POST to /mcp to start a session" });
-    return;
-  }
-
-  // Reserve slot synchronously to prevent TOCTOU race at capacity boundary
-  if (sessions.size + pendingSessions >= MAX_SESSIONS) {
-    logger.warn("session capacity reached", { current: sessions.size });
-    res.status(503).json({ error: "Server at session capacity, try again later" });
-    return;
-  }
-  pendingSessions++;
-
-  try {
-    const transport = new StreamableHTTPServerTransport({
-      sessionIdGenerator: () => randomUUID(),
-    });
-
-    transport.onclose = () => {
-      if (transport.sessionId) {
-        sessions.delete(transport.sessionId);
-        logger.debug("session closed", { session: transport.sessionId });
-      }
-    };
-
-    const server = createMcpServer(req.etrackerToken!, req.apiKey!);
-    await server.connect(transport);
-
-    await transport.handleRequest(req, res, req.body);
-
-    // Store after first request so we have the session ID
-    if (transport.sessionId) {
-      sessions.set(transport.sessionId, { transport, expiresAt: Date.now() + SESSION_TTL_MS });
-      logger.info("session opened", { partner: req.partnerId, session: transport.sessionId });
-    }
-  } finally {
-    pendingSessions--;
-  }
+app.delete("/mcp", (_req, res) => {
+  res.status(405).json({ error: "Method not allowed: this server is stateless, no session to close" });
 });
 
 // ── Start ─────────────────────────────────────────────────────────────────────

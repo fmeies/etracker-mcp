@@ -6,12 +6,6 @@ metadata:
     {{- include "etracker-mcp.labels" . | nindent 4 }}
 spec:
   type: {{ .Values.service.type }}
-  sessionAffinity: {{ .Values.service.sessionAffinity }}
-  {{- if eq .Values.service.sessionAffinity "ClientIP" }}
-  sessionAffinityConfig:
-    clientIP:
-      timeoutSeconds: {{ .Values.service.sessionAffinityTimeoutSeconds }}
-  {{- end }}
   selector:
     {{- include "etracker-mcp.selectorLabels" . | nindent 4 }}
   ports:
