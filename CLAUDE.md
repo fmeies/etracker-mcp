@@ -6,7 +6,7 @@
 etracker-mcp/          # repo root — Node.js/TypeScript MCP server
   src/
     index.ts           # Express app, /mcp (stateless) + /health endpoints
-    auth.ts            # authMiddleware — X-Auth-Token + X-Api-Key headers
+    auth.ts            # authMiddleware — Authorization: Bearer <partnerKey>.<etrackerToken>
     ratelimit.ts       # Three-layer bucket rate limiter (burst / global / per-partner)
     cache.ts           # In-memory TTL cache (5 min), cache keys scoped per token
     analytics-api.ts   # etracker Reporting API client (BASE_URL: ws.etracker.com/api/v7)
@@ -49,16 +49,20 @@ helm install etracker-mcp ./helm -f my-values.yaml
 | `ETRACKER_REPORT_CONVERSIONS` | no | Override default conversions report ID (default: `EAConversions`) |
 | `ETRACKER_REPORT_AD` | no | Override default ad report ID (default: `EAMarketing`) |
 
-Copy `.env.example` to `.env` for local development. The etracker token is **not** stored in env — partners pass it per request via `X-Api-Key`.
+Copy `.env.example` to `.env` for local development. The etracker token is **not** stored in env — partners pass it per request inside the `Authorization` header.
 
 ## Authentication model
 
-Every request to `/mcp` requires two headers:
+Every request to `/mcp` requires one header, carrying both credentials:
 
-- `X-Auth-Token` — MCP server access key (validated against `PARTNER_API_KEYS`, resolves to a `partnerId` used for rate limiting)
-- `X-Api-Key` — etracker account token (forwarded to the etracker API as `X-ET-Token`; never stored server-side)
+```
+Authorization: Bearer <partnerKey>.<etrackerToken>
+```
 
-Header names are deliberately generic rather than etracker-specific (e.g. not `X-ET-Token`): Claude's remote MCP connector UI only allows custom header names from an Anthropic-approved allowlist, and common names like `X-Auth-Token`/`X-Api-Key` pass that check where a custom name like `X-ET-Token` would not.
+- `partnerKey` — MCP server access key (validated against `PARTNER_API_KEYS`, resolves to a `partnerId` used for rate limiting)
+- `etrackerToken` — etracker account token (forwarded to the etracker API as `X-ET-Token`; never stored server-side)
+
+Both credentials are packed into `Authorization` rather than sent as separate custom headers: some MCP connector proxies (observed with Claude Desktop) silently drop custom headers like `X-Api-Key` even when the header *name* is on Anthropic's approval allowlist — only `Authorization` is reliably forwarded everywhere, since OAuth flows depend on it.
 
 ## Rate limiting
 

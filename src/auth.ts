@@ -1,13 +1,16 @@
 /**
- * API Key authentication middleware.
+ * Authorization-header authentication middleware.
  *
- * Two headers are required:
- *   X-Auth-Token — MCP server access key (maps to a partner ID, used for rate limiting)
- *   X-Api-Key    — etracker API token (forwarded to the etracker API as X-ET-Token)
+ * One header carries both credentials:
+ *   Authorization: Bearer <partnerKey>.<etrackerToken>
  *
- * Header names deliberately avoid etracker-specific terms (e.g. X-ET-Token) because
- * Claude's remote MCP connector UI only allows custom header names from an Anthropic-
- * approved allowlist; generic names like X-Auth-Token/X-Api-Key clear that check.
+ *   partnerKey    — MCP server access key (maps to a partner ID, used for rate limiting)
+ *   etrackerToken — etracker API token (forwarded to the etracker API as X-ET-Token)
+ *
+ * Custom headers (even Anthropic-approved names like X-Api-Key) get silently
+ * dropped by some MCP connector proxies before the request reaches us — only
+ * Authorization is reliably forwarded everywhere, so both credentials are
+ * packed into it instead of using two separate headers.
  *
  * PARTNER_API_KEYS env var format:
  *   PARTNER_API_KEYS='{"key-abc":"partner-a","key-xyz":"partner-b"}'
@@ -41,21 +44,28 @@ export function authMiddleware(
   res: Response,
   next: NextFunction
 ): void {
-  const partnerKeyHeader = req.headers["x-auth-token"];
-  const key = Array.isArray(partnerKeyHeader) ? partnerKeyHeader[0] : partnerKeyHeader;
+  const authHeader = req.headers.authorization;
+  const bearerToken = authHeader?.startsWith("Bearer ") ? authHeader.slice("Bearer ".length) : undefined;
+  const separatorIndex = bearerToken?.indexOf(".") ?? -1;
 
-  if (!key || !KEYS.has(key)) {
-    logger.warn("auth failed", { reason: "invalid or missing partner key", path: req.path });
-    res.status(401).json({ error: "Unauthorized: invalid or missing X-Auth-Token" });
+  if (!bearerToken || separatorIndex === -1) {
+    logger.warn("auth failed", { reason: "invalid or missing Authorization header", path: req.path });
+    res.status(401).json({ error: "Unauthorized: expected Authorization: Bearer <partnerKey>.<etrackerToken>" });
     return;
   }
 
-  const etHeader = req.headers["x-api-key"];
-  const etToken = Array.isArray(etHeader) ? etHeader[0] : etHeader;
+  const key = bearerToken.slice(0, separatorIndex);
+  const etToken = bearerToken.slice(separatorIndex + 1);
+
+  if (!KEYS.has(key)) {
+    logger.warn("auth failed", { reason: "invalid partner key", path: req.path });
+    res.status(401).json({ error: "Unauthorized: invalid partner key" });
+    return;
+  }
 
   if (!etToken) {
     logger.warn("auth failed", { reason: "missing et token", partner: KEYS.get(key), path: req.path });
-    res.status(401).json({ error: "Unauthorized: missing X-Api-Key" });
+    res.status(401).json({ error: "Unauthorized: missing etracker token" });
     return;
   }
 

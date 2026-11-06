@@ -21,7 +21,8 @@ ingress:
   # tlsSecretName: etracker-mcp-tls
 
 # Partner API keys → partner IDs (JSON object).
-# The etracker token is NOT stored here — partners pass it via the X-Api-Key header.
+# The etracker token is NOT stored here — partners pass it inside the
+# Authorization header: "Authorization: Bearer <partnerKey>.<etrackerToken>"
 # Example: '{"key-abc":"partner-a","key-xyz":"partner-b"}'
 partnerApiKeys: ""
 

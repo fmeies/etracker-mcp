@@ -15,12 +15,12 @@ const app = express();
 app.use(express.json({ limit: "100kb" }));
 
 // CORS — browser-based MCP clients (e.g. Claude Desktop) send a preflight
-// OPTIONS request before attaching the custom auth headers. Without this,
+// OPTIONS request before attaching the Authorization header. Without this,
 // the preflight hits authMiddleware, gets a 401 with no CORS headers, and
 // the browser blocks the real request before it's ever sent.
 app.use((req, res, next) => {
   res.setHeader("Access-Control-Allow-Origin", req.headers.origin ?? "*");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Accept, X-Auth-Token, X-Api-Key, Mcp-Session-Id");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Accept, Authorization, Mcp-Session-Id");
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
   if (req.method === "OPTIONS") {
     res.status(204).end();
@@ -53,10 +53,10 @@ app.get("/health", (_req, res) => {
 // All MCP routes require auth + rate limiting
 app.use(authMiddleware);
 
-// Redact X-Api-Key (etracker token) after auth has stored it in req.etrackerToken,
-// so it never appears in downstream logs or error output
+// Redact Authorization (carries both credentials) after auth has stored them
+// in req.apiKey/req.etrackerToken, so it never appears in downstream logs
 app.use((req: AuthenticatedRequest, _res, next) => {
-  if (req.headers["x-api-key"]) req.headers["x-api-key"] = "[REDACTED]";
+  if (req.headers.authorization) req.headers.authorization = "[REDACTED]";
   next();
 });
 app.use((req: AuthenticatedRequest, res, next) => {

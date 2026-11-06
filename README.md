@@ -5,7 +5,7 @@ An MCP (Model Context Protocol) server that exposes the etracker analytics API t
 ## Architecture
 
 - **Transport:** StreamableHTTP (MCP over HTTP + SSE)
-- **Auth:** Two-header scheme — `X-Auth-Token` (partner key) + `X-Api-Key` (etracker account token, forwarded upstream as `X-ET-Token`)
+- **Auth:** Single `Authorization: Bearer <partnerKey>.<etrackerToken>` header (etracker token forwarded upstream as `X-ET-Token`)
 - **Rate limiting:** Three-layer bucket — burst guard (8 req/10 s), global window (40 req/5 min), per-partner window (20 req/5 min)
 - **Sessions:** Stateless — every request gets a fresh transport + `McpServer`, no session affinity needed across replicas.
 
@@ -33,9 +33,9 @@ All data tools accept `from`/`to` (YYYY-MM-DD, max 90 days), optional `attribute
 
 ## Authentication
 
-The etracker token is **not** stored in the server — partners pass it per request via `X-Api-Key` (forwarded to etracker as `X-ET-Token`). The server only stores the mapping of partner API keys to partner IDs.
+The etracker token is **not** stored in the server — partners pass it per request inside the `Authorization` header (forwarded to etracker as `X-ET-Token`). The server only stores the mapping of partner API keys to partner IDs.
 
-Header names are deliberately generic rather than etracker-specific: Claude's remote MCP connector UI only allows custom header names from an Anthropic-approved allowlist, and common names like `X-Auth-Token`/`X-Api-Key` pass that check where a custom name like `X-ET-Token` would not.
+Both credentials travel in one `Authorization: Bearer <partnerKey>.<etrackerToken>` header rather than separate custom headers: some MCP connector proxies (observed with Claude Desktop) silently drop custom headers like `X-Api-Key` even when the header name itself is on Anthropic's approval allowlist — only `Authorization` is reliably forwarded everywhere.
 
 Generate a partner key:
 ```bash
@@ -129,8 +129,7 @@ ingress:
     "etracker": {
       "url": "https://etracker-mcp.example.com/mcp",
       "headers": {
-        "X-Auth-Token": "<your-partner-key>",
-        "X-Api-Key": "<your-etracker-token>"
+        "Authorization": "Bearer <your-partner-key>.<your-etracker-token>"
       }
     }
   }
