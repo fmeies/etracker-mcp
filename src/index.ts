@@ -14,6 +14,21 @@ const PORT = parseInt(process.env.PORT ?? "3000", 10);
 const app = express();
 app.use(express.json({ limit: "100kb" }));
 
+// CORS — browser-based MCP clients (e.g. Claude Desktop) send a preflight
+// OPTIONS request before attaching the custom auth headers. Without this,
+// the preflight hits authMiddleware, gets a 401 with no CORS headers, and
+// the browser blocks the real request before it's ever sent.
+app.use((req, res, next) => {
+  res.setHeader("Access-Control-Allow-Origin", req.headers.origin ?? "*");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Accept, X-Auth-Token, X-Api-Key, Mcp-Session-Id");
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
+  if (req.method === "OPTIONS") {
+    res.status(204).end();
+    return;
+  }
+  next();
+});
+
 // Request logging — runs for every request including health and auth failures
 app.use((req, res, next) => {
   const start = Date.now();
