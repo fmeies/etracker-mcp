@@ -39,10 +39,10 @@ app.get("/health", (_req, res) => {
 // All MCP routes require auth + rate limiting
 app.use(authMiddleware);
 
-// Redact X-ET-Token after auth has stored it in req.etrackerToken,
+// Redact X-Api-Key (etracker token) after auth has stored it in req.etrackerToken,
 // so it never appears in downstream logs or error output
 app.use((req: AuthenticatedRequest, _res, next) => {
-  if (req.headers["x-et-token"]) req.headers["x-et-token"] = "[REDACTED]";
+  if (req.headers["x-api-key"]) req.headers["x-api-key"] = "[REDACTED]";
   next();
 });
 app.use((req: AuthenticatedRequest, res, next) => {

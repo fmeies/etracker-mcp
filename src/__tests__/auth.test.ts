@@ -23,7 +23,7 @@ afterEach(() => vi.unstubAllEnvs());
 // Tests ──────────────────────────────────────────────────────────────────────
 
 describe("authMiddleware", () => {
-  it("rejects a request with no X-Api-Key header", async () => {
+  it("rejects a request with no X-Auth-Token header", async () => {
     const { authMiddleware } = await import("../auth.js");
     const res = mockRes();
     const next = vi.fn();
@@ -32,27 +32,27 @@ describe("authMiddleware", () => {
     expect(next).not.toHaveBeenCalled();
   });
 
-  it("rejects a request with an unknown X-Api-Key", async () => {
+  it("rejects a request with an unknown X-Auth-Token", async () => {
     const { authMiddleware } = await import("../auth.js");
     const res = mockRes();
     const next = vi.fn();
-    authMiddleware(mockReq({ "x-api-key": "wrong-key" }), res, next as NextFunction);
+    authMiddleware(mockReq({ "x-auth-token": "wrong-key" }), res, next as NextFunction);
     expect(res.status).toHaveBeenCalledWith(401);
     expect(next).not.toHaveBeenCalled();
   });
 
-  it("rejects a request with a valid X-Api-Key but missing X-ET-Token", async () => {
+  it("rejects a request with a valid X-Auth-Token but missing X-Api-Key", async () => {
     const { authMiddleware } = await import("../auth.js");
     const res = mockRes();
     const next = vi.fn();
-    authMiddleware(mockReq({ "x-api-key": "test-key" }), res, next as NextFunction);
+    authMiddleware(mockReq({ "x-auth-token": "test-key" }), res, next as NextFunction);
     expect(res.status).toHaveBeenCalledWith(401);
     expect(next).not.toHaveBeenCalled();
   });
 
   it("calls next() and populates req fields on a valid request", async () => {
     const { authMiddleware } = await import("../auth.js");
-    const req = mockReq({ "x-api-key": "test-key", "x-et-token": "et-abc123" });
+    const req = mockReq({ "x-auth-token": "test-key", "x-api-key": "et-abc123" });
     const res = mockRes();
     const next = vi.fn();
     authMiddleware(req, res, next as NextFunction);
@@ -67,7 +67,7 @@ describe("authMiddleware", () => {
     const { authMiddleware } = await import("../auth.js");
     const res = mockRes();
     const next = vi.fn();
-    authMiddleware(mockReq({ "x-api-key": "test-key", "x-et-token": "et-abc" }), res, next as NextFunction);
+    authMiddleware(mockReq({ "x-auth-token": "test-key", "x-api-key": "et-abc" }), res, next as NextFunction);
     expect(res.status).toHaveBeenCalledWith(401);
     expect(next).not.toHaveBeenCalled();
   });

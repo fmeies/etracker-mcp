@@ -6,7 +6,7 @@
 etracker-mcp/          # repo root — Node.js/TypeScript MCP server
   src/
     index.ts           # Express app, session store, /mcp + /health endpoints
-    auth.ts            # authMiddleware — X-Api-Key + X-ET-Token headers
+    auth.ts            # authMiddleware — X-Auth-Token + X-Api-Key headers
     ratelimit.ts       # Three-layer bucket rate limiter (burst / global / per-partner)
     cache.ts           # In-memory TTL cache (5 min), cache keys scoped per token
     analytics-api.ts   # etracker Reporting API client (BASE_URL: ws.etracker.com/api/v7)
@@ -49,14 +49,16 @@ helm install etracker-mcp ./helm -f my-values.yaml
 | `ETRACKER_REPORT_CONVERSIONS` | no | Override default conversions report ID (default: `EAConversions`) |
 | `ETRACKER_REPORT_AD` | no | Override default ad report ID (default: `EAMarketing`) |
 
-Copy `.env.example` to `.env` for local development. The etracker token is **not** stored in env — partners pass it per request via `X-ET-Token`.
+Copy `.env.example` to `.env` for local development. The etracker token is **not** stored in env — partners pass it per request via `X-Api-Key`.
 
 ## Authentication model
 
 Every request to `/mcp` requires two headers:
 
-- `X-Api-Key` — MCP server access key (validated against `PARTNER_API_KEYS`, resolves to a `partnerId` used for rate limiting)
-- `X-ET-Token` — etracker account token (forwarded directly to the etracker API; never stored server-side)
+- `X-Auth-Token` — MCP server access key (validated against `PARTNER_API_KEYS`, resolves to a `partnerId` used for rate limiting)
+- `X-Api-Key` — etracker account token (forwarded to the etracker API as `X-ET-Token`; never stored server-side)
+
+Header names are deliberately generic rather than etracker-specific (e.g. not `X-ET-Token`): Claude's remote MCP connector UI only allows custom header names from an Anthropic-approved allowlist, and common names like `X-Auth-Token`/`X-Api-Key` pass that check where a custom name like `X-ET-Token` would not.
 
 ## Rate limiting
 
