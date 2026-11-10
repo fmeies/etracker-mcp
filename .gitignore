@@ -7,4 +7,5 @@ token.json
 *secret.json
 .env
 my-values.yaml
-vitest*
+vitest.config.js
+.DS_Store

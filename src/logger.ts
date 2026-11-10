@@ -1,8 +1,15 @@
 const LEVELS = { debug: 0, info: 1, warn: 2, error: 3 } as const;
 type Level = keyof typeof LEVELS;
 
-const configuredLevel = (process.env.LOG_LEVEL ?? "info") as Level;
-const threshold = LEVELS[configuredLevel] ?? LEVELS.info;
+function isLevel(value: string): value is Level {
+  return Object.hasOwn(LEVELS, value);
+}
+
+const configuredLevel = process.env.LOG_LEVEL ?? "info";
+if (!isLevel(configuredLevel)) {
+  throw new Error(`Invalid LOG_LEVEL "${configuredLevel}". Use one of: ${Object.keys(LEVELS).join(", ")}.`);
+}
+const threshold = LEVELS[configuredLevel];
 
 function log(level: Level, msg: string, meta?: Record<string, unknown>): void {
   if (LEVELS[level] < threshold) return;

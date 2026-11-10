@@ -1,73 +1,111 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
+import { createRateLimiter, type RateLimiter, type RateLimitResult } from "../ratelimit.js";
 
-// Each test resets the module so bucket state starts at zero.
+const BURST_WINDOW_MS = 10_000;
+const WINDOW_MS = 5 * 60_000;
+
+let clock: number;
+let limiter: RateLimiter;
+
 beforeEach(() => {
-  vi.resetModules();
-  vi.useFakeTimers();
+  clock = 0;
+  limiter = createRateLimiter(() => clock);
 });
-afterEach(() => vi.useRealTimers());
 
-describe("checkRateLimit", () => {
-  it("allows a single request", async () => {
-    const { checkRateLimit } = await import("../ratelimit.js");
-    expect(checkRateLimit("partner-a").allowed).toBe(true);
+/** Acquires and immediately releases, i.e. a call that finished instantly. */
+function call(partnerId = "partner-a"): RateLimitResult {
+  const result = limiter.acquire(partnerId);
+  if (result.allowed) result.release();
+  return result;
+}
+
+/** Makes `count` completed calls, spaced so the burst guard never triggers. */
+function callsSpacedOut(count: number, partnerId: (i: number) => string = () => "partner-a"): void {
+  for (let i = 0; i < count; i++) {
+    expect(call(partnerId(i)).allowed).toBe(true);
+    clock += BURST_WINDOW_MS / 8 + 1;
+  }
+}
+
+function retryAfter(result: RateLimitResult): number {
+  if (result.allowed) throw new Error("expected the call to be refused");
+  return result.retryAfterMs;
+}
+
+describe("rate limiter", () => {
+  it("allows a single call", () => {
+    expect(call().allowed).toBe(true);
   });
 
-  it("blocks at the burst limit (8 req / 10 s)", async () => {
-    const { checkRateLimit } = await import("../ratelimit.js");
-    for (let i = 0; i < 8; i++) checkRateLimit("partner-a");
-    const result = checkRateLimit("partner-a");
-    expect(result.allowed).toBe(false);
-    expect(result.retryAfterMs).toBeGreaterThan(0);
+  it("blocks at the burst limit (8 calls / 10 s) with a positive retry delay", () => {
+    for (let i = 0; i < 8; i++) call();
+    expect(retryAfter(call())).toBe(BURST_WINDOW_MS);
   });
 
-  it("resets the burst bucket after 10 s", async () => {
-    const { checkRateLimit } = await import("../ratelimit.js");
-    for (let i = 0; i < 8; i++) checkRateLimit("partner-a");
-    vi.advanceTimersByTime(10_001);
-    expect(checkRateLimit("partner-a").allowed).toBe(true);
+  it("frees burst capacity as calls slide out of the window", () => {
+    for (let i = 0; i < 8; i++) call();
+    clock = BURST_WINDOW_MS;
+    expect(call().allowed).toBe(true);
   });
 
-  it("blocks at the global limit (40 req / 5 min)", async () => {
-    const { checkRateLimit } = await import("../ratelimit.js");
-    // Use a different partner per request to avoid the per-partner cap,
-    // and reset the burst bucket every 8 requests.
-    for (let i = 0; i < 40; i++) {
-      if (i > 0 && i % 8 === 0) vi.advanceTimersByTime(10_001);
-      checkRateLimit(`partner-${i}`);
+  it("blocks at the per-partner limit (20 calls / 5 min)", () => {
+    callsSpacedOut(20);
+    expect(call("partner-a").allowed).toBe(false);
+    expect(call("partner-b").allowed).toBe(true);
+  });
+
+  it("blocks at the global limit (40 calls / 5 min) across partners", () => {
+    callsSpacedOut(40, (i) => `partner-${i}`);
+    expect(call("partner-new").allowed).toBe(false);
+  });
+
+  it("never allows more than 40 calls in any sliding 5-minute span", () => {
+    const allowedAt: number[] = [];
+    // Hammer the limiter every second for 15 minutes across many partners
+    for (clock = 0; clock < 3 * WINDOW_MS; clock += 1_000) {
+      if (call(`partner-${clock % 7}`).allowed) allowedAt.push(clock);
     }
-    vi.advanceTimersByTime(10_001); // ensure burst is not the reason for blocking
-    const result = checkRateLimit("partner-new");
-    expect(result.allowed).toBe(false);
-  });
-
-  it("blocks at the per-partner limit (20 req / 5 min)", async () => {
-    const { checkRateLimit } = await import("../ratelimit.js");
-    for (let i = 0; i < 20; i++) {
-      if (i > 0 && i % 8 === 0) vi.advanceTimersByTime(10_001);
-      checkRateLimit("partner-a");
+    for (const start of allowedAt) {
+      const inSpan = allowedAt.filter((t) => t >= start && t < start + WINDOW_MS).length;
+      expect(inSpan).toBeLessThanOrEqual(40);
     }
-    vi.advanceTimersByTime(10_001);
-    const result = checkRateLimit("partner-a");
-    expect(result.allowed).toBe(false);
   });
 
-  it("partner limits are independent of each other", async () => {
-    const { checkRateLimit } = await import("../ratelimit.js");
-    // Exhaust partner-a
-    for (let i = 0; i < 20; i++) {
-      if (i > 0 && i % 8 === 0) vi.advanceTimersByTime(10_001);
-      checkRateLimit("partner-a");
+  it("reports the longest wait when several windows are full", () => {
+    callsSpacedOut(20); // partner-a capped for ~5 minutes
+    for (let i = 0; i < 8; i++) call("partner-b"); // burst full for 10 s
+    const wait = retryAfter(call("partner-a"));
+    expect(wait).toBeGreaterThan(BURST_WINDOW_MS);
+    clock += wait;
+    expect(call("partner-a").allowed).toBe(true);
+  });
+
+  it("does not record a refused call in any window", () => {
+    callsSpacedOut(20); // partner-a is capped; 20 global slots used
+    for (let i = 0; i < 50; i++) call("partner-a"); // all refused
+    callsSpacedOut(20, () => "partner-b"); // would fail if refusals had used global slots
+  });
+
+  it("caps parallel in-flight calls at 8 and frees a slot on release", () => {
+    const held = Array.from({ length: 8 }, (_, i) => limiter.acquire(`partner-${i}`));
+    expect(held.every((r) => r.allowed)).toBe(true);
+    clock += BURST_WINDOW_MS; // burst window clear, so only the parallel guard can refuse
+    expect(limiter.acquire("partner-x").allowed).toBe(false);
+
+    const first = held[0];
+    if (first.allowed) first.release();
+    expect(limiter.acquire("partner-x").allowed).toBe(true);
+  });
+
+  it("ignores a second release of the same slot", () => {
+    const held = Array.from({ length: 8 }, () => limiter.acquire("partner-a"));
+    const first = held[0];
+    if (first.allowed) {
+      first.release();
+      first.release();
     }
-    vi.advanceTimersByTime(10_001);
-    // partner-b should still be allowed
-    expect(checkRateLimit("partner-b").allowed).toBe(true);
-  });
-
-  it("returns a positive retryAfterMs when blocked", async () => {
-    const { checkRateLimit } = await import("../ratelimit.js");
-    for (let i = 0; i < 8; i++) checkRateLimit("partner-a");
-    const { retryAfterMs } = checkRateLimit("partner-a");
-    expect(retryAfterMs).toBeGreaterThan(0);
+    clock += BURST_WINDOW_MS;
+    expect(limiter.acquire("partner-b").allowed).toBe(true);
+    expect(limiter.acquire("partner-c").allowed).toBe(false); // only one slot was actually freed
   });
 });

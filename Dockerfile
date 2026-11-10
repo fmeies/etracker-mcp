@@ -12,5 +12,7 @@ ENV NODE_ENV=production
 COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/node_modules ./node_modules
 COPY package.json ./
+# The official image ships an unprivileged "node" user (uid 1000)
+USER node
 EXPOSE 3000
 CMD ["node", "dist/index.js"]

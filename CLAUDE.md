@@ -5,7 +5,8 @@
 ```
 etracker-mcp/          # repo root — Node.js/TypeScript MCP server
   src/
-    index.ts           # Express app, /mcp (stateless) + /health endpoints
+    index.ts           # Startup: validates env (fails fast), listens, graceful SIGTERM shutdown
+    app.ts             # createApp(): Express app, CORS, /mcp (stateless) + /health endpoints
     auth.ts            # authMiddleware — Authorization: Bearer <partnerKey>.<etrackerToken>
     ratelimit.ts       # Three-layer bucket rate limiter (burst / global / per-partner)
     cache.ts           # In-memory TTL cache (5 min), cache keys scoped per token
@@ -45,9 +46,12 @@ helm install etracker-mcp ./helm -f my-values.yaml
 |---|---|---|
 | `PARTNER_API_KEYS` | yes | JSON object: `{"<key>":"<partner-id>"}` — generate keys with `openssl rand -hex 32` |
 | `PORT` | no | HTTP port (default: 3000) |
+| `LOG_LEVEL` | no | `debug` / `info` / `warn` / `error` (default: `info`) |
+
+Invalid `PARTNER_API_KEYS` (missing, not a JSON object, empty, key containing `.`), `PORT` or `LOG_LEVEL` stop the server at startup.
 | `ETRACKER_REPORT_PAGEVIEWS` | no | Override default pageviews report ID (default: `EATime`) |
 | `ETRACKER_REPORT_CONVERSIONS` | no | Override default conversions report ID (default: `EAConversions`) |
-| `ETRACKER_REPORT_AD` | no | Override default ad report ID (default: `EAMarketing`) |
+| `ETRACKER_REPORT_AD` | no | Override default ad report ID (default: `EAMedium`) |
 
 Copy `.env.example` to `.env` for local development. The etracker token is **not** stored in env — partners pass it per request inside the `Authorization` header.
 
@@ -66,17 +70,30 @@ Both credentials are packed into `Authorization` rather than sent as separate cu
 
 ## Rate limiting
 
-Three-layer bucket in `ratelimit.ts`, checked per request before MCP handling:
+`ratelimit.ts` (`createRateLimiter`). A slot is acquired **per actual etracker API call**, inside the tools (`createUpstream` in `tools.ts`), and released when the call finishes — not per HTTP request. MCP protocol traffic (`initialize`, `tools/list`) and cache hits cost nothing; identical concurrent cache misses share one call. Windows are sliding logs, so no 5-minute span can exceed a limit.
 
-1. Burst guard (global): 8 req / 10 s
-2. Global window: 40 req / 5 min (80% of etracker's 50 req / 5 min quota)
-3. Per-partner window: 20 req / 5 min
+1. Parallel guard (global): max 8 calls in flight (etracker allows 10)
+2. Burst guard (global): 8 calls / 10 s
+3. Global window: 40 calls / 5 min (80% of etracker's 50 calls / 5 min quota)
+4. Per-partner window (keyed by `partnerId`): 20 calls / 5 min
 
-Returns HTTP 429 with `Retry-After` header when exceeded.
+When exceeded, the tool call fails with `Rate limit exceeded. Retry after Ns.`
+
+State is in-memory, so the limits only hold for a single replica. The Helm chart refuses to render with `replicaCount > 1`.
 
 ## MCP tools
 
-All data tools enforce max 90-day date range and max 5 attributes + 5 figures per query. Missing columns default to the first 5 from `get_report_info`.
+All data tools enforce max 90-day date range and max 5 attributes + 5 figures per query (more is rejected, not truncated). Query size is kept small on purpose:
+
+- **Row limit is always sent** — `ReportDataParams.limit` is required; default 100, max 1000. One extra probe row is fetched so `truncated` is exact; truncated responses carry a next-`offset` hint.
+- **Default attributes** — omitted attributes default to the report's own default breakdown (`selectedAttributes`, e.g. year + month for `EATime`), else its first attribute. Each attribute multiplies rows; the row limit bounds the result either way. Omitted figures default to the first 5 visible ones.
+- **Validated input** — dates must be real `YYYY-MM-DD` dates (90 days, counted inclusively); filter JSON is checked against Zod schemas matching `report-api.yaml` (max 10 filters each).
+- **Totals row** — etracker prepends a totals row (`id: "-"`, `tree_status: "=S"`) to every `/data` response, outside `limit`/`offset`. Its values are deduplicated (`unique_visits`) or recomputed (rates), so they are **not** the sum of the data rows — never sum rows to get a total. `getReportData` splits it into `{ total, rows }`.
+- **`compare_periods`** fetches only `metric_column` with `limit=1` and reads the totals row. Periods are `baseline_*` (earlier) and `current_*` (later); `delta = current − baseline`. Non-numeric totals (null, `""`) are errors, never 0.
+- **Errors** — etracker answers client errors as HTTP 400 with an `errorCode` (`1012` unknown report, `9000` invalid token); `analytics-api.ts` maps these to actionable messages. Tool failures are logged (`tool call failed`), since the SDK only returns them as `isError`.
+- **Server instructions** (`SERVER_INSTRUCTIONS` in `tools.ts`) tell the model the workflow, common report IDs and the quota.
+
+The API spec is in `report-api.yaml` (50 calls / 5 min, 10 parallel, max 100,000 rows per response, max 20 attributes per query).
 
 | Tool | Description |
 |---|---|
@@ -85,7 +102,7 @@ All data tools enforce max 90-day date range and max 5 attributes + 5 figures pe
 | `get_report_metadata` | Raw column definitions (types, sortable, filterable flags) |
 | `get_pageviews` | Web analytics data (default: `EATime`) |
 | `get_conversions` | Conversion / e-commerce data (default: `EAConversions`) |
-| `get_ad_performance` | Marketing / ad channel data (default: `EAMarketing`) |
+| `get_ad_performance` | Traffic/conversions per marketing channel (default: `EAMedium`; `EAMarketing` does not exist) |
 | `get_report_data` | Generic — any report, with attribute/keyfigure filters |
 | `compare_periods` | Compares a metric column between two date ranges (delta + %) |
 
@@ -98,5 +115,10 @@ The `/mcp` endpoint is stateless: every request gets a fresh `StreamableHTTPServ
 `cache.ts` provides a simple TTL cache (5 min). Cache keys are scoped per token so partners never see each other's data. Used for `list_reports`, `get_report_info`, `get_report_metadata`, and all `getReportData` calls.
 
 ## Helm notes
+
+- `replicaCount` must be 1 and `partnerApiKeys` is required — the chart fails to render otherwise. Deployment strategy is `Recreate` so two limiters never run at once; a secret checksum annotation restarts the pod when keys change.
+- Service defaults to `ClusterIP` (expose via the TLS ingress); `NodePort` is opt-in for local testing.
+- Docker and CI use `npm install`, not `npm ci`: the macOS-generated lockfile lacks Linux-only optional packages (`@emnapi/*`), which makes `npm ci` fail on Alpine.
+- The pod runs as non-root (uid 1000) with a read-only root filesystem and all capabilities dropped.
 
 - Never use `--set` for `partnerApiKeys` — Helm treats `{`, `}`, `,` as special syntax. Always use `-f my-values.yaml`.

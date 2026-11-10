@@ -1,17 +1,20 @@
+# Must stay 1: rate limits are in-memory per pod (the chart refuses to render otherwise)
 replicaCount: 1
 
 image:
   repository: etracker-mcp
   tag: latest
-  pullPolicy: IfNotPresent
+  # "latest" is a moving tag, so always pull; pin a version tag to use IfNotPresent
+  pullPolicy: Always
 
 service:
-  type: NodePort
+  # ClusterIP keeps the plain-HTTP service inside the cluster; expose it via the
+  # TLS ingress. NodePort opens it on every node's IP, so use it only for local
+  # testing (e.g. Docker Desktop: localhost:<nodePort>).
+  type: ClusterIP
   port: 80
   targetPort: 3000
-  # Set type: NodePort and a nodePort value (30000-32767) for direct access
-  # without an ingress controller. On Docker Desktop use localhost:<nodePort>.
-  nodePort: 30300
+  nodePort: 30300  # used only when type is NodePort
 
 ingress:
   enabled: false
@@ -26,11 +29,14 @@ ingress:
 # Example: '{"key-abc":"partner-a","key-xyz":"partner-b"}'
 partnerApiKeys: ""
 
+# debug | info | warn | error — any other value stops the server at startup
+logLevel: info
+
 # Optional etracker report ID overrides
 etrackerReports:
   pageviews: ""    # default: EATime
   conversions: ""  # default: EAConversions
-  ad: ""           # default: EAMarketing
+  ad: ""           # default: EAMedium (marketing channels)
 
 resources:
   requests:
