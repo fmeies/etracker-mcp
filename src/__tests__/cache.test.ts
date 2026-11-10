@@ -77,3 +77,35 @@ describe("makeCacheKey", () => {
     expect(k1).not.toBe(k2);
   });
 });
+
+describe("cache size bound", () => {
+  const MAX_TOTAL_BYTES = 64 * 1024 * 1024;
+  const CHARS_PER_ENTRY = 8 * 1024 * 1024; // ~16 MB per entry once serialized as UTF-16
+
+  it("evicts the oldest entries to stay under the memory budget", async () => {
+    const { cacheGet, cacheSet, cacheSizeBytes } = await import("../cache.js");
+    const large = "x".repeat(CHARS_PER_ENTRY);
+    for (let i = 0; i < 5; i++) cacheSet(`k${i}`, large);
+    expect(cacheSizeBytes()).toBeLessThanOrEqual(MAX_TOTAL_BYTES);
+    expect(cacheGet("k0")).toBeUndefined();
+    expect(cacheGet("k4")).toBe(large);
+  });
+
+  it("does not cache a value larger than the whole budget", async () => {
+    const { cacheGet, cacheSet, cacheSizeBytes } = await import("../cache.js");
+    cacheSet("small", "keep me");
+    cacheSet("huge", "x".repeat(MAX_TOTAL_BYTES));
+    expect(cacheGet("huge")).toBeUndefined();
+    expect(cacheGet("small")).toBe("keep me");
+    expect(cacheSizeBytes()).toBeGreaterThan(0);
+  });
+
+  it("frees the old size when a key is overwritten", async () => {
+    const { cacheSet, cacheSizeBytes } = await import("../cache.js");
+    cacheSet("k", "x".repeat(1000));
+    const afterFirst = cacheSizeBytes();
+    cacheSet("k", "x".repeat(1000));
+    expect(cacheSizeBytes()).toBe(afterFirst);
+  });
+});
+

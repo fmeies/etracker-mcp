@@ -14,6 +14,9 @@
 import { logger } from "./logger.js";
 
 const BASE_URL = "https://ws.etracker.com/api/v7";
+const FETCH_TIMEOUT_MS = 10_000;
+// Enough to show etracker's error message without echoing arbitrary upstream payloads
+const MAX_ERROR_BODY_CHARS = 500;
 
 async function etrackerFetch<T>(token: string, path: string, params?: Record<string, string>): Promise<T> {
   const url = new URL(`${BASE_URL}${path}`);
@@ -31,11 +34,11 @@ async function etrackerFetch<T>(token: string, path: string, params?: Record<str
       "X-ET-Token": token,
       Accept: "application/json",
     },
-    signal: AbortSignal.timeout(10_000),
+    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
   });
 
   if (!res.ok) {
-    const body = await res.text();
+    const body = (await res.text()).slice(0, MAX_ERROR_BODY_CHARS);
     logger.error("etracker api error", { path, status: res.status, duration_ms: Date.now() - start });
     throw new Error(`etracker API error ${res.status} ${res.statusText}: ${body}`);
   }
@@ -46,11 +49,8 @@ async function etrackerFetch<T>(token: string, path: string, params?: Record<str
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
-export interface ReportListItem {
-  reportId: string;
-  label: string;
-  description?: string;
-}
+/** Report ID → label, e.g. { EAPage: "Pages", EATime: "Month & Year" } */
+export type ReportList = Record<string, string>;
 
 export interface ReportColumn {
   id: string;
@@ -85,10 +85,28 @@ export interface ReportInfoResponse {
   report: { id: string; createDate: string };
   attributes: ReportAttribute[];
   figures: ReportFigure[];
-  selectedAttributes: string[];
+  selectedAttributes?: string[]; // absent from the spec's /info example, so not guaranteed
 }
 
 export type ReportRow = Record<string, string | number | null>;
+
+/**
+ * etracker prepends a totals row (id "-", tree_status "=S") to every data response,
+ * outside of limit/offset. Its figures are deduplicated across rows (unique_visits)
+ * or recomputed (rates), so they must never be derived by summing `rows`.
+ */
+export interface ReportData {
+  total?: ReportRow;
+  rows: ReportRow[];
+}
+
+const TOTAL_ROW_ID = "-";
+
+function splitTotalRow(response: ReportRow[]): ReportData {
+  const [first, ...rest] = response;
+  if (first?.id === TOTAL_ROW_ID) return { total: first, rows: rest };
+  return { rows: response };
+}
 
 export interface ReportDataParams {
   reportId: string;
@@ -96,7 +114,7 @@ export interface ReportDataParams {
   endDate?: string;
   attributes?: string;   // comma-separated attribute IDs (max 20)
   figures?: string;      // comma-separated key figure IDs
-  limit?: number;
+  limit: number;         // required so no query can ever fetch an unbounded result set
   offset?: number;
   sortColumn?: string;
   sortOrder?: "1" | "2"; // 1 = descending, 2 = ascending
@@ -105,9 +123,9 @@ export interface ReportDataParams {
 }
 
 export interface AttributeFilter {
-  filterType: string;
+  filterType: "extended";
   attributeId: string;
-  input: string;
+  input: string | string[];
   filter: "include" | "exclude";
   type: "contains" | "exact" | "regex";
 }
@@ -116,14 +134,14 @@ export interface KeyfigureFilter {
   keyfigure: string;
   input: number;
   type: "lt" | "gt" | "eq";
-  filter: string;
+  filter: "include" | "exclude";
 }
 
 // ── API methods ──────────────────────────────────────────────────────────────
 
 /** Lists all available reports for this account. */
-export async function listReports(token: string): Promise<ReportListItem[]> {
-  return etrackerFetch<ReportListItem[]>(token, "/report");
+export async function listReports(token: string): Promise<ReportList> {
+  return etrackerFetch<ReportList>(token, "/report");
 }
 
 /** Returns attributes and figures available for a report. */
@@ -139,19 +157,20 @@ export async function getReportMetadata(token: string, reportId: string): Promis
 }
 
 /** Fetches actual report data with optional filtering/sorting/pagination. */
-export async function getReportData(token: string, params: ReportDataParams): Promise<ReportRow[]> {
+export async function getReportData(token: string, params: ReportDataParams): Promise<ReportData> {
   const { reportId, attributeFilter, keyfigureFilter, limit, offset, ...rest } = params;
 
   const query: Record<string, string> = {};
   for (const [k, v] of Object.entries(rest)) {
     if (v !== undefined) query[k] = String(v);
   }
-  if (limit !== undefined) query["limit"] = String(limit);
+  query["limit"] = String(limit);
   if (offset !== undefined) query["offset"] = String(offset);
   if (attributeFilter?.length) query["attributeFilter"] = JSON.stringify(attributeFilter);
   if (keyfigureFilter?.length) query["keyfigureFilter"] = JSON.stringify(keyfigureFilter);
 
-  return etrackerFetch<ReportRow[]>(token, `/report/${encodeURIComponent(reportId)}/data`, query);
+  const response = await etrackerFetch<ReportRow[]>(token, `/report/${encodeURIComponent(reportId)}/data`, query);
+  return splitTotalRow(response);
 }
 
 // ── Semantic helpers (map tool concepts → etracker report IDs) ───────────────

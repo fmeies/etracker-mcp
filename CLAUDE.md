@@ -5,7 +5,8 @@
 ```
 etracker-mcp/          # repo root — Node.js/TypeScript MCP server
   src/
-    index.ts           # Express app, /mcp (stateless) + /health endpoints
+    index.ts           # Startup: validates env (fails fast), listens, graceful SIGTERM shutdown
+    app.ts             # createApp(): Express app, CORS, /mcp (stateless) + /health endpoints
     auth.ts            # authMiddleware — Authorization: Bearer <partnerKey>.<etrackerToken>
     ratelimit.ts       # Three-layer bucket rate limiter (burst / global / per-partner)
     cache.ts           # In-memory TTL cache (5 min), cache keys scoped per token
@@ -45,6 +46,9 @@ helm install etracker-mcp ./helm -f my-values.yaml
 |---|---|---|
 | `PARTNER_API_KEYS` | yes | JSON object: `{"<key>":"<partner-id>"}` — generate keys with `openssl rand -hex 32` |
 | `PORT` | no | HTTP port (default: 3000) |
+| `LOG_LEVEL` | no | `debug` / `info` / `warn` / `error` (default: `info`) |
+
+Invalid `PARTNER_API_KEYS` (missing, not a JSON object, empty, key containing `.`), `PORT` or `LOG_LEVEL` stop the server at startup.
 | `ETRACKER_REPORT_PAGEVIEWS` | no | Override default pageviews report ID (default: `EATime`) |
 | `ETRACKER_REPORT_CONVERSIONS` | no | Override default conversions report ID (default: `EAConversions`) |
 | `ETRACKER_REPORT_AD` | no | Override default ad report ID (default: `EAMarketing`) |
@@ -66,17 +70,27 @@ Both credentials are packed into `Authorization` rather than sent as separate cu
 
 ## Rate limiting
 
-Three-layer bucket in `ratelimit.ts`, checked per request before MCP handling:
+Three-layer bucket in `ratelimit.ts`. A slot is consumed **per actual etracker API call**, inside the tools (`createUpstream` in `tools.ts`) — not per HTTP request. MCP protocol traffic (`initialize`, `tools/list`) and cache hits cost nothing.
 
-1. Burst guard (global): 8 req / 10 s
-2. Global window: 40 req / 5 min (80% of etracker's 50 req / 5 min quota)
-3. Per-partner window: 20 req / 5 min
+1. Burst guard (global): 8 calls / 10 s
+2. Global window: 40 calls / 5 min (80% of etracker's 50 calls / 5 min quota)
+3. Per-partner window (keyed by `partnerId`): 20 calls / 5 min
 
-Returns HTTP 429 with `Retry-After` header when exceeded.
+When exceeded, the tool call fails with `Rate limit exceeded. Retry after Ns.`
+
+State is in-memory, so the limits only hold for a single replica. The Helm chart refuses to render with `replicaCount > 1`.
 
 ## MCP tools
 
-All data tools enforce max 90-day date range and max 5 attributes + 5 figures per query. Missing columns default to the first 5 from `get_report_info`.
+All data tools enforce max 90-day date range and max 5 attributes + 5 figures per query (more is rejected, not truncated). Query size is kept small on purpose:
+
+- **Row limit is always sent** — `ReportDataParams.limit` is required; default 100, max 1000. One extra probe row is fetched so `truncated` is exact; truncated responses carry a next-`offset` hint.
+- **Default attributes** — omitted attributes default to the report's own default breakdown (`selectedAttributes`, e.g. year + month for `EATime`), else its first attribute. Each attribute multiplies rows; the row limit bounds the result either way. Omitted figures default to the first 5 visible ones.
+- **Validated input** — dates must be real `YYYY-MM-DD` dates (90 days, counted inclusively); filter JSON is checked against Zod schemas matching `report-api.yaml` (max 10 filters each).
+- **Totals row** — etracker prepends a totals row (`id: "-"`, `tree_status: "=S"`) to every `/data` response, outside `limit`/`offset`. Its values are deduplicated (`unique_visits`) or recomputed (rates), so they are **not** the sum of the data rows — never sum rows to get a total. `getReportData` splits it into `{ total, rows }`.
+- **`compare_periods`** fetches only `metric_column` with `limit=1` and reads the totals row.
+
+The API spec is in `report-api.yaml` (50 calls / 5 min, 10 parallel, max 100,000 rows per response, max 20 attributes per query).
 
 | Tool | Description |
 |---|---|
@@ -98,5 +112,8 @@ The `/mcp` endpoint is stateless: every request gets a fresh `StreamableHTTPServ
 `cache.ts` provides a simple TTL cache (5 min). Cache keys are scoped per token so partners never see each other's data. Used for `list_reports`, `get_report_info`, `get_report_metadata`, and all `getReportData` calls.
 
 ## Helm notes
+
+- `replicaCount` must be 1 and `partnerApiKeys` is required — the chart fails to render otherwise.
+- The pod runs as non-root (uid 1000) with a read-only root filesystem and all capabilities dropped.
 
 - Never use `--set` for `partnerApiKeys` — Helm treats `{`, `}`, `,` as special syntax. Always use `-f my-values.yaml`.

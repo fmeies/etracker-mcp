@@ -1,3 +1,4 @@
+# Must stay 1: rate limits are in-memory per pod (the chart refuses to render otherwise)
 replicaCount: 1
 
 image:
@@ -25,6 +26,9 @@ ingress:
 # Authorization header: "Authorization: Bearer <partnerKey>.<etrackerToken>"
 # Example: '{"key-abc":"partner-a","key-xyz":"partner-b"}'
 partnerApiKeys: ""
+
+# debug | info | warn | error — any other value stops the server at startup
+logLevel: info
 
 # Optional etracker report ID overrides
 etrackerReports:

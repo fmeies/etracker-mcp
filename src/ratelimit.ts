@@ -1,5 +1,7 @@
 /**
- * Three-layer rate limiting against etracker upstream (50 req / 5 min, max 10 parallel):
+ * Three-layer rate limiting against etracker upstream (50 req / 5 min, max 10 parallel).
+ * A slot is consumed per actual etracker API call (cache hits and MCP protocol
+ * traffic are free). State is in-memory, so the limits only hold for a single replica.
  *
  * 1. Burst guard (global):   max 8 req / 10 sec  — stays well under the 10-parallel limit
  * 2. Global window:          max 40 req / 5 min  — 80% of etracker's quota, leaves headroom for retries
@@ -12,6 +14,11 @@ const BURST_MAX = 8;
 const WINDOW_MS = 5 * 60_000;    // 5 minutes
 const MAX_GLOBAL = 40;            // 80% of etracker's 50
 const MAX_PER_PARTNER = 20;       // half of global so ≥2 partners can always coexist
+
+export interface RateLimitResult {
+  allowed: boolean;
+  retryAfterMs: number;
+}
 
 interface Bucket {
   count: number;
@@ -30,7 +37,7 @@ function refreshBucket(bucket: Bucket, windowMs: number): Bucket {
   return bucket;
 }
 
-function tryConsume(bucket: Bucket, limit: number): { allowed: boolean; retryAfterMs: number } {
+function tryConsume(bucket: Bucket, limit: number): RateLimitResult {
   if (bucket.count >= limit) {
     return { allowed: false, retryAfterMs: bucket.resetAt - Date.now() };
   }
@@ -42,7 +49,7 @@ function undo(bucket: Bucket): void {
   bucket.count = Math.max(0, bucket.count - 1);
 }
 
-export function checkRateLimit(partnerKey: string): { allowed: boolean; retryAfterMs: number } {
+export function checkRateLimit(partnerId: string): RateLimitResult {
   refreshBucket(burstBucket, BURST_WINDOW_MS);
   refreshBucket(globalBucket, WINDOW_MS);
 
@@ -58,10 +65,10 @@ export function checkRateLimit(partnerKey: string): { allowed: boolean; retryAft
   }
 
   // Layer 3: per-partner 5-min window
-  let partnerBucket = partnerBuckets.get(partnerKey);
+  let partnerBucket = partnerBuckets.get(partnerId);
   if (!partnerBucket || Date.now() >= partnerBucket.resetAt) {
     partnerBucket = { count: 0, resetAt: Date.now() + WINDOW_MS };
-    partnerBuckets.set(partnerKey, partnerBucket);
+    partnerBuckets.set(partnerId, partnerBucket);
   }
   const partner = tryConsume(partnerBucket, MAX_PER_PARTNER);
   if (!partner.allowed) {

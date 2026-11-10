@@ -1,13 +1,13 @@
 # etracker MCP Server
 
-An MCP (Model Context Protocol) server that exposes the etracker analytics API to AI assistants. Partners connect via HTTP/SSE and authenticate with their own API key plus an etracker account token passed per request.
+An MCP (Model Context Protocol) server that exposes the etracker analytics API to AI assistants. Partners connect via HTTP and authenticate with their own API key plus an etracker account token passed per request.
 
 ## Architecture
 
-- **Transport:** StreamableHTTP (MCP over HTTP + SSE)
+- **Transport:** Stateless StreamableHTTP (`POST /mcp`; no SSE stream)
 - **Auth:** Single `Authorization: Bearer <partnerKey>.<etrackerToken>` header (etracker token forwarded upstream as `X-ET-Token`)
-- **Rate limiting:** Three-layer bucket — burst guard (8 req/10 s), global window (40 req/5 min), per-partner window (20 req/5 min)
-- **Sessions:** Stateless — every request gets a fresh transport + `McpServer`, no session affinity needed across replicas.
+- **Rate limiting:** Three-layer bucket per etracker API call (cache hits and protocol traffic are free) — burst guard (8 calls/10 s), global window (40 calls/5 min), per-partner window (20 calls/5 min). In-memory, so run a single replica.
+- **Sessions:** Stateless — every request gets a fresh transport + `McpServer`, no session affinity needed.
 
 ## Endpoints
 
@@ -29,7 +29,7 @@ An MCP (Model Context Protocol) server that exposes the etracker analytics API t
 | `get_report_data` | Generic tool — fetch data from any report with filters |
 | `compare_periods` | Compare a metric between two date ranges |
 
-All data tools accept `from`/`to` (YYYY-MM-DD, max 90 days), optional `attributes` and `figures` (up to 5 each), `limit`/`offset`, and `sort_column`/`sort_order`.
+All data tools accept `from`/`to` (YYYY-MM-DD, max 90 days), optional `attributes` and `figures` (up to 5 each; attributes default to the report's own default breakdown), `limit`/`offset` (default 100 rows, max 1000), and `sort_column`/`sort_order`. Responses are `{ total, rows, row_count, limit, offset, truncated }`, where `total` is etracker's own totals row (deduplicated, not the sum of `rows`). `compare_periods` compares these totals.
 
 ## Authentication
 
@@ -105,7 +105,8 @@ ingress:
 | Value | Default | Description |
 |-------|---------|-------------|
 | `partnerApiKeys` | `""` | JSON object mapping API keys to partner IDs |
-| `replicaCount` | `1` | Number of replicas (server is stateless, any pod handles any request) |
+| `replicaCount` | `1` | Must be 1 — rate limits are in-memory per pod (the chart fails to render otherwise) |
+| `logLevel` | `info` | `debug`, `info`, `warn` or `error` |
 | `image.repository` | `etracker-mcp` | Container image |
 | `image.tag` | `latest` | Image tag |
 | `service.type` | `NodePort` | Service type |

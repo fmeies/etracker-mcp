@@ -1,8 +1,6 @@
 import type { NextFunction, Response } from "express";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { AuthenticatedRequest } from "../auth.js";
-
-// Helpers ────────────────────────────────────────────────────────────────────
+import { describe, expect, it, vi } from "vitest";
+import { createAuthMiddleware, parsePartnerKeys, type AuthenticatedRequest } from "../auth.js";
 
 function mockReq(headers: Record<string, string>): AuthenticatedRequest {
   return { headers } as AuthenticatedRequest;
@@ -13,71 +11,63 @@ function mockRes() {
   return res as unknown as Response;
 }
 
-// Each test reloads auth.ts so PARTNER_API_KEYS is re-read from the env.
-beforeEach(() => {
-  vi.resetModules();
-  vi.stubEnv("PARTNER_API_KEYS", JSON.stringify({ "test-key": "partner-a" }));
-});
-afterEach(() => vi.unstubAllEnvs());
+const authMiddleware = createAuthMiddleware(new Map([["test-key", "partner-a"]]));
 
-// Tests ──────────────────────────────────────────────────────────────────────
+function authenticate(authorization?: string) {
+  const req = mockReq(authorization === undefined ? {} : { authorization });
+  const res = mockRes();
+  const next = vi.fn();
+  authMiddleware(req, res, next as NextFunction);
+  return { req, res, next };
+}
 
 describe("authMiddleware", () => {
-  it("rejects a request with no Authorization header", async () => {
-    const { authMiddleware } = await import("../auth.js");
-    const res = mockRes();
-    const next = vi.fn();
-    authMiddleware(mockReq({}), res, next as NextFunction);
+  it.each([
+    ["no Authorization header", undefined],
+    ["no Bearer prefix", "test-key.et-abc123"],
+    ["no separator", "Bearer test-key"],
+    ["an unknown partner key", "Bearer wrong-key.et-abc123"],
+    ["a missing etracker token", "Bearer test-key."],
+  ])("rejects a request with %s", (_case, authorization) => {
+    const { res, next } = authenticate(authorization);
     expect(res.status).toHaveBeenCalledWith(401);
     expect(next).not.toHaveBeenCalled();
   });
 
-  it("rejects an Authorization header without a Bearer prefix", async () => {
-    const { authMiddleware } = await import("../auth.js");
-    const res = mockRes();
-    const next = vi.fn();
-    authMiddleware(mockReq({ authorization: "test-key.et-abc123" }), res, next as NextFunction);
-    expect(res.status).toHaveBeenCalledWith(401);
-    expect(next).not.toHaveBeenCalled();
-  });
-
-  it("rejects a Bearer token with an unknown partner key", async () => {
-    const { authMiddleware } = await import("../auth.js");
-    const res = mockRes();
-    const next = vi.fn();
-    authMiddleware(mockReq({ authorization: "Bearer wrong-key.et-abc123" }), res, next as NextFunction);
-    expect(res.status).toHaveBeenCalledWith(401);
-    expect(next).not.toHaveBeenCalled();
-  });
-
-  it("rejects a valid partner key with a missing etracker token", async () => {
-    const { authMiddleware } = await import("../auth.js");
-    const res = mockRes();
-    const next = vi.fn();
-    authMiddleware(mockReq({ authorization: "Bearer test-key." }), res, next as NextFunction);
-    expect(res.status).toHaveBeenCalledWith(401);
-    expect(next).not.toHaveBeenCalled();
-  });
-
-  it("calls next() and populates req fields on a valid request", async () => {
-    const { authMiddleware } = await import("../auth.js");
-    const req = mockReq({ authorization: "Bearer test-key.et-abc123" });
-    const res = mockRes();
-    const next = vi.fn();
-    authMiddleware(req, res, next as NextFunction);
+  it("calls next() and populates req fields on a valid request", () => {
+    const { req, next } = authenticate("Bearer test-key.et-abc123");
     expect(next).toHaveBeenCalledOnce();
     expect(req.partnerId).toBe("partner-a");
-    expect(req.apiKey).toBe("test-key");
     expect(req.etrackerToken).toBe("et-abc123");
   });
 
-  it("works with no PARTNER_API_KEYS configured (rejects everything)", async () => {
-    vi.stubEnv("PARTNER_API_KEYS", "");
-    const { authMiddleware } = await import("../auth.js");
-    const res = mockRes();
-    const next = vi.fn();
-    authMiddleware(mockReq({ authorization: "Bearer test-key.et-abc" }), res, next as NextFunction);
-    expect(res.status).toHaveBeenCalledWith(401);
-    expect(next).not.toHaveBeenCalled();
+  it("accepts the Bearer scheme case-insensitively", () => {
+    const { req, next } = authenticate("bearer test-key.et-abc123");
+    expect(next).toHaveBeenCalledOnce();
+    expect(req.partnerId).toBe("partner-a");
+  });
+
+  it("keeps dots inside the etracker token, splitting only at the first one", () => {
+    const { req } = authenticate("Bearer test-key.part1.part2.part3");
+    expect(req.etrackerToken).toBe("part1.part2.part3");
+  });
+});
+
+describe("parsePartnerKeys", () => {
+  it("parses a key → partner map", () => {
+    expect(parsePartnerKeys('{"key-a":"partner-a"}').get("key-a")).toBe("partner-a");
+  });
+
+  it.each([
+    ["is unset", undefined, "not set"],
+    ["is blank", "  ", "not set"],
+    ["is not JSON", "{oops", "not valid JSON"],
+    ["is an array", '["key"]', "must be a JSON object"],
+    ["is empty", "{}", "contains no keys"],
+    ["has a key containing the separator", '{"key.a":"partner-a"}', 'must not contain "."'],
+    ["has a non-string partner ID", '{"key-a":42}', "non-empty partner ID strings"],
+    ["has an empty partner ID", '{"key-a":""}', "non-empty partner ID strings"],
+  ])("throws when PARTNER_API_KEYS %s", (_case, raw, message) => {
+    expect(() => parsePartnerKeys(raw)).toThrow(message);
   });
 });

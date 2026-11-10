@@ -1,0 +1,196 @@
+openapi: 3.1.0
+info:
+  title: 'etracker Report API'
+  description: 'The etracker Report API is an interface for the development of your own applications using your etracker data. Please note that there is a limit of 50 API calls per 5 minutes and a maximum of 10 parallel requests. Each response is limited to 100.000 rows.'
+  contact:
+    name: 'etracker Customer Service'
+    url: 'https://www.etracker.com/docs'
+    email: service@etracker.com
+  version: v7
+servers:
+  -
+    url: 'https://ws.etracker.com/api/v7'
+    description: 'etracker Report API'
+paths:
+  /report:
+    get:
+      summary: 'Gets available reports.'
+      responses:
+        '200':
+          description: 'All available reports.'
+          content:
+            application/json:
+              schema: {  }
+              example:
+                EAPage: Pages
+                EATime: 'Month & Year'
+                EAGeo: Geo
+      security:
+        -
+          token: []
+  '/report/{reportId}/info':
+    get:
+      summary: 'Gets general information and general metadata for a report.'
+      parameters:
+        -
+          $ref: '#/components/parameters/reportIdParam'
+      responses:
+        '200':
+          description: 'General information and general metadata for a report.'
+          content:
+            application/json:
+              schema: {  }
+              example: '[{"report":{"id":"EAPage","createDate":"2023-09-01 00:00:00","segments":3},"attributes":[{"id":"page_name","label":"Page name"}]}]'
+      security:
+        -
+          token: []
+  '/report/{reportId}/metaData':
+    get:
+      summary: 'Gets information on types and names of the columns of a report.'
+      parameters:
+        -
+          $ref: '#/components/parameters/reportIdParam'
+      responses:
+        '200':
+          description: 'Information on types and names of the columns of a report.'
+          content:
+            application/json:
+              schema: {  }
+              example: '[{"id":"id","label":"","type":"","sortable":true,"filterable":false},{"id":"page_name","label":"Page name","type":"attribute","sortable":true,"filterable":true,"common_attribute":true}]'
+      security:
+        -
+          token: []
+  '/report/{reportId}/data':
+    get:
+      summary: 'Gets report data for a specified report.'
+      parameters:
+        -
+          $ref: '#/components/parameters/reportIdParam'
+        -
+          name: startDate
+          in: query
+          description: 'Start date of report data, format YYYY-MM-DD.'
+          required: false
+          schema:
+            type: string
+          example: '2023-08-01'
+        -
+          name: endDate
+          in: query
+          description: 'End date of report data, format YYYY-MM-DD.'
+          required: false
+          schema:
+            type: string
+          example: '2023-08-31'
+        -
+          name: limit
+          in: query
+          description: 'Maximum number of rows to be returned.'
+          required: false
+          schema:
+            type: integer
+          example: '10'
+        -
+          name: offset
+          in: query
+          description: 'Offset of rows to be returned.'
+          required: false
+          schema:
+            type: integer
+          example: '0'
+        -
+          name: sortColumn
+          in: query
+          description: 'Column used for sorting.'
+          required: false
+          schema:
+            type: string
+          example: page_name
+        -
+          name: sortOrder
+          in: query
+          description: "'1' for descending, '2' for ascending."
+          required: false
+          schema:
+            type: string
+          example: '1'
+        -
+          name: attributes
+          in: query
+          description: 'Comma separated list of attributes to be returned. A maximum of 20 segments can be set per query.'
+          required: false
+          schema:
+            type: string
+          example: 'page_name,url'
+        -
+          name: figures
+          in: query
+          description: 'Comma separated list of keyfigures to be returned.'
+          required: false
+          schema:
+            type: string
+          example: 'page_impressions,unique_visits'
+        -
+          name: attributeFilter
+          in: query
+          description: "JSON array of attribute filter objects to be applied. An attribute filter object consists of one or more of the following elements:\n1. *attributeId*: The ID of the attribute to be filtered.\n2. *input*: Contains the substring which needs to be included in the dimension or segment.\n3. *filter*: One of \"include\" or \"exclude\".\n4. *type*: One of \"contains\", \"exact\", or \"regex\".\n5. *filterType*: Must be \"extended\"."
+          required: false
+          schema:
+            type: string
+          examples:
+            noFilter:
+              summary: 'no filter'
+              description: 'no attributeFilter'
+              value: ''
+            pageNameFilter:
+              summary: 'page_name is "Main" or "Overview" and url contains "/en/" or "/fr/")'
+              description: 'Show page requests with page_name matching "Main" or "Overview" and url containing "/en/" or "/fr/".'
+              value: '[{"attributeId":"page_name","input":["Main","Overview"],"filter":"include","type":"exact","filterType":"extended"},{"attributeId":"url","input":["/en/","/fr/"],"filter":"include","type":"contains","filterType":"extended"}]'
+        -
+          name: keyfigureFilter
+          in: query
+          description: "JSON array of keyfigure filter objects to be applied. A keyfigure filter object consists of the following elements:\n1. *input*: Contains the integer value used for filtering.\n2. *type*: One of \"lt\" = less than, \"gt\" = greater than, \"eq\" =  equals.\n3. *filter*: One of \"include\" or \"exclude\".\n4. *keyfigure*: The ID of the keyfigure used for filtering."
+          required: false
+          schema:
+            type: string
+          examples:
+            noFilter:
+              summary: 'no filter'
+              description: 'no keyfigureFilter'
+              value: ''
+            singleFilter:
+              summary: 'unique_visits > 10'
+              description: 'Pages with more than 10 unique visits.'
+              value: '[{"input":10,"type":"gt","filter":"include","keyfigure":"unique_visits"}]'
+            twoFilters:
+              summary: 'unique_visits > 10 && unique_visits < 100'
+              description: 'Pages with more than 10 unique visits and less than 100 unique visits.'
+              value: '[{"input":10,"type":"gt","filter":"include","keyfigure":"unique_visits"},{"input":100,"type":"lt","filter":"include","keyfigure":"unique_visits"}]'
+      responses:
+        '200':
+          description: 'Report data for a specified report.'
+          content:
+            text/csv:
+              example: "-,=S,,126\n12476,=0,-,0\n25259584,=0,\"Gym Pant\",2"
+            application/json:
+              schema: {  }
+              example: '[{"id":"-","page_name":"","unique_visits":126},{"id":"12476","page_name":"-","unique_visits":0},{"id":"25259584","page_name":"Gym Pant","unique_visits":2}]'
+      security:
+        -
+          token: []
+components:
+  parameters:
+    reportIdParam:
+      name: reportId
+      in: path
+      description: 'ID of the report to be fetched.'
+      required: true
+      schema:
+        type: string
+      example: EAPage
+  securitySchemes:
+    token:
+      type: apiKey
+      description: 'Access token with scope "Reporting API", that can be created in etracker Enterprise accounts. The access token is only valid for the account in which it was created.'
+      name: X-ET-Token
+      in: header
