@@ -80,7 +80,9 @@ function createUpstream(token: string, consumeRateSlot: RateSlot): Upstream {
       if (!slot.allowed) {
         throw new Error(`Rate limit exceeded. Retry after ${Math.ceil(slot.retryAfterMs / MS_PER_SECOND)}s.`);
       }
-      const request = fetch()
+      // Starting from a resolved promise means even a synchronous throw reaches .finally and releases the slot
+      const request = Promise.resolve()
+        .then(fetch)
         .then((result) => {
           cacheSet(key, result);
           return result;
