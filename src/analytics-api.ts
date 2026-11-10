@@ -5,7 +5,7 @@
  * Optional env vars (report IDs — override defaults per account):
  *   ETRACKER_REPORT_PAGEVIEWS    (default: EATime)
  *   ETRACKER_REPORT_CONVERSIONS  (default: EAConversions)
- *   ETRACKER_REPORT_AD           (default: EAMarketing)
+ *   ETRACKER_REPORT_AD           (default: EAMedium — marketing channels)
  *
  * The etracker account token is not stored here — it is passed per request
  * via the X-ET-Token header and forwarded directly to the API.
@@ -17,6 +17,24 @@ const BASE_URL = "https://ws.etracker.com/api/v7";
 const FETCH_TIMEOUT_MS = 10_000;
 // Enough to show etracker's error message without echoing arbitrary upstream payloads
 const MAX_ERROR_BODY_CHARS = 500;
+
+// etracker reports most client errors as HTTP 400 with an errorCode in the JSON body
+const ERROR_HINTS: Record<string, string> = {
+  "1012": "Report not found or not available via the API. Call list_reports to see valid report IDs.",
+  "9000": "The etracker token is invalid. Check the token in your connector's Authorization header (it needs the \"Reporting API\" scope).",
+};
+const AUTH_ERROR_HINT =
+  "etracker rejected the token. It must be an etracker Enterprise access token with the \"Reporting API\" scope.";
+
+function errorHint(status: number, body: string): string | undefined {
+  try {
+    const code = String((JSON.parse(body) as { errorCode?: unknown }).errorCode);
+    if (ERROR_HINTS[code]) return ERROR_HINTS[code];
+  } catch {
+    // Non-JSON error bodies carry no errorCode; fall through to the status-based hint
+  }
+  return status === 401 || status === 403 ? AUTH_ERROR_HINT : undefined;
+}
 
 async function etrackerFetch<T>(token: string, path: string, params?: Record<string, string>): Promise<T> {
   const url = new URL(`${BASE_URL}${path}`);
@@ -40,7 +58,8 @@ async function etrackerFetch<T>(token: string, path: string, params?: Record<str
   if (!res.ok) {
     const body = (await res.text()).slice(0, MAX_ERROR_BODY_CHARS);
     logger.error("etracker api error", { path, status: res.status, duration_ms: Date.now() - start });
-    throw new Error(`etracker API error ${res.status} ${res.statusText}: ${body}`);
+    const hint = errorHint(res.status, body);
+    throw new Error(`etracker API error ${res.status}${hint ? ` — ${hint}` : ""} Details: ${body}`);
   }
 
   logger.debug("etracker api response", { path, status: res.status, duration_ms: Date.now() - start });
@@ -91,7 +110,7 @@ export interface ReportInfoResponse {
 export type ReportRow = Record<string, string | number | null>;
 
 /**
- * etracker prepends a totals row (id "-", tree_status "=S") to every data response,
+ * etracker prepends a totals row (tree_status "=S"; id "-" per attribute, e.g. "-,-") to every data response,
  * outside of limit/offset. Its figures are deduplicated across rows (unique_visits)
  * or recomputed (rates), so they must never be derived by summing `rows`.
  */
@@ -100,11 +119,21 @@ export interface ReportData {
   rows: ReportRow[];
 }
 
-const TOTAL_ROW_ID = "-";
+const TOTAL_ROW_STATUS = "=S";
+// One "-" per requested attribute: "-" for one attribute, "-,-" for two, …
+const TOTAL_ROW_ID = /^-(,-)*$/;
 
-function splitTotalRow(response: ReportRow[]): ReportData {
-  const [first, ...rest] = response;
-  if (first?.id === TOTAL_ROW_ID) return { total: first, rows: rest };
+function isTotalRow(row: ReportRow | undefined): row is ReportRow {
+  if (!row) return false;
+  return row.tree_status === TOTAL_ROW_STATUS || TOTAL_ROW_ID.test(String(row.id));
+}
+
+function splitTotalRow(response: unknown): ReportData {
+  if (!Array.isArray(response)) {
+    throw new Error(`etracker returned unexpected report data (expected an array, got ${typeof response}).`);
+  }
+  const [first, ...rest] = response as ReportRow[];
+  if (isTotalRow(first)) return { total: first, rows: rest };
   return { rows: response };
 }
 
@@ -169,7 +198,7 @@ export async function getReportData(token: string, params: ReportDataParams): Pr
   if (attributeFilter?.length) query["attributeFilter"] = JSON.stringify(attributeFilter);
   if (keyfigureFilter?.length) query["keyfigureFilter"] = JSON.stringify(keyfigureFilter);
 
-  const response = await etrackerFetch<ReportRow[]>(token, `/report/${encodeURIComponent(reportId)}/data`, query);
+  const response = await etrackerFetch<unknown>(token, `/report/${encodeURIComponent(reportId)}/data`, query);
   return splitTotalRow(response);
 }
 
@@ -188,5 +217,5 @@ export function conversionsReportId(): string {
 }
 
 export function adReportId(): string {
-  return reportId("ETRACKER_REPORT_AD", "EAMarketing");
+  return reportId("ETRACKER_REPORT_AD", "EAMedium");
 }

@@ -12,6 +12,9 @@ metadata:
 spec:
   replicas: {{ .Values.replicaCount }}
   revisionHistoryLimit: {{ .Values.revisionHistoryLimit }}
+  # A rolling update would briefly run two pods, each with its own in-memory limiter
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       {{- include "etracker-mcp.selectorLabels" . | nindent 6 }}
@@ -19,6 +22,9 @@ spec:
     metadata:
       labels:
         {{- include "etracker-mcp.selectorLabels" . | nindent 8 }}
+      annotations:
+        # Restarts the pod when partner keys change; env vars are only read at startup
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
     spec:
       # Lets in-flight requests finish on rollout; the app exits on SIGTERM within 20 s
       terminationGracePeriodSeconds: 30

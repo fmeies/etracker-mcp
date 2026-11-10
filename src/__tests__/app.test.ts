@@ -48,6 +48,30 @@ describe("HTTP app", () => {
     expect(res.headers.get("access-control-allow-headers")).toContain("Authorization");
   });
 
+  it("returns a JSON-RPC parse error, not an HTML stack trace, for malformed JSON", async () => {
+    const res = await fetch(`${baseUrl}/mcp`, { method: "POST", headers: MCP_HEADERS, body: "{bad" });
+    expect(res.status).toBe(400);
+    expect(res.headers.get("content-type")).toContain("application/json");
+    expect(res.headers.get("access-control-allow-origin")).toBeTruthy();
+    const body = await res.json();
+    expect(body.error.code).toBe(-32700);
+    expect(JSON.stringify(body)).not.toContain("node_modules");
+  });
+
+  it("rejects oversized bodies with a JSON 413", async () => {
+    const res = await fetch(`${baseUrl}/mcp`, {
+      method: "POST", headers: MCP_HEADERS, body: JSON.stringify({ padding: "x".repeat(200 * 1024) }),
+    });
+    expect(res.status).toBe(413);
+    expect((await res.json()).error.code).toBe(-32700);
+  });
+
+  it("rejects unauthenticated requests before parsing the body", async () => {
+    const res = await fetch(`${baseUrl}/mcp`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{bad" });
+    expect(res.status).toBe(401);
+    expect(res.headers.get("www-authenticate")).toContain("Bearer");
+  });
+
   it.each(["GET", "DELETE"])("returns 405 for %s /mcp on the stateless server", async (method) => {
     const res = await fetch(`${baseUrl}/mcp`, { method, headers: AUTH });
     expect(res.status).toBe(405);
@@ -60,6 +84,7 @@ describe("HTTP app", () => {
     });
     expect(init.status).toBe(200);
     expect(init.message.result.serverInfo.name).toBe("etracker-mcp");
+    expect(init.message.result.instructions).toContain("list_reports");
 
     // Far more protocol requests than the 8-per-10s burst limit: none may be rate limited
     const BURST_PLUS_MARGIN = 12;

@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as api from "../analytics-api.js";
+import type { RateLimitResult } from "../ratelimit.js";
 import { createToolRegistrations } from "../tools.js";
 
 // Mock the etracker API so tests never make real HTTP calls.
@@ -10,7 +11,7 @@ vi.mock("../analytics-api.js", () => ({
   getReportData: vi.fn(),
   pageviewsReportId: () => "EATime",
   conversionsReportId: () => "EAConversions",
-  adReportId: () => "EAMarketing",
+  adReportId: () => "EAMedium",
 }));
 
 const mockGetReportInfo = vi.mocked(api.getReportInfo);
@@ -40,8 +41,8 @@ function withTotal(total: number, rows: Array<Record<string, number>> = [{ visit
 let testCounter = 0;
 function freshToken() { return `token-${testCounter++}`; }
 
-const allowedSlot = () => ({ allowed: true, retryAfterMs: 0 });
-const blockedSlot = () => ({ allowed: false, retryAfterMs: 30_000 });
+const allowedSlot = (): RateLimitResult => ({ allowed: true, release: () => {} });
+const blockedSlot = (): RateLimitResult => ({ allowed: false, retryAfterMs: 30_000 });
 
 function tools(token = freshToken()) {
   return createToolRegistrations(token, allowedSlot);
@@ -111,6 +112,35 @@ describe("rate limit slots", () => {
     expect(consumeRateSlot).toHaveBeenCalledTimes(2);
   });
 
+  it("releases the slot when the etracker call finishes, even on failure", async () => {
+    const release = vi.fn();
+    const handler = createToolRegistrations(freshToken(), () => ({ allowed: true, release }))
+      .find(t => t.name === "get_pageviews")!.handler;
+    mockGetReportData.mockRejectedValueOnce(new Error("upstream down"));
+    await expect(handler({ from: "2025-01-01", to: "2025-01-31", attributes: "date", figures: "visits" }))
+      .rejects.toThrow("upstream down");
+    expect(release).toHaveBeenCalledOnce();
+  });
+
+  it("shares one upstream call between identical concurrent requests", async () => {
+    const consumeRateSlot = vi.fn(allowedSlot);
+    const handler = createToolRegistrations(freshToken(), consumeRateSlot)
+      .find(t => t.name === "get_pageviews")!.handler;
+    const args = { from: "2025-01-01", to: "2025-01-31", attributes: "date", figures: "visits" };
+    await Promise.all([handler(args), handler(args), handler(args)]);
+    expect(mockGetReportData).toHaveBeenCalledOnce();
+    expect(consumeRateSlot).toHaveBeenCalledOnce();
+  });
+
+  it("does not spend quota on invalid filters", async () => {
+    const consumeRateSlot = vi.fn(allowedSlot);
+    const handler = createToolRegistrations(freshToken(), consumeRateSlot)
+      .find(t => t.name === "get_report_data")!.handler;
+    await expect(handler({ report_id: "EAPage", from: "2025-01-01", to: "2025-01-31", keyfigure_filter: "[{" }))
+      .rejects.toThrow("Invalid JSON");
+    expect(consumeRateSlot).not.toHaveBeenCalled();
+  });
+
   it("does not call etracker when no slot is available", async () => {
     const handler = createToolRegistrations(freshToken(), blockedSlot)
       .find(t => t.name === "get_pageviews")!.handler;
@@ -147,7 +177,7 @@ describe("get_report_info", () => {
     const result = await handler({ report_id: "EATime" });
     const data = JSON.parse(result.content[0].text);
     expect(data.attributes).toEqual([{ id: "date", label: "Date" }]);
-    expect(data.figures).toEqual([{ id: "visits", label: "Visits", group: undefined }]);
+    expect(data.figures).toEqual([{ id: "visits", label: "Visits", group: undefined, recommended: true }]);
   });
 
   it("excludes deprecated figures", async () => {
@@ -173,7 +203,7 @@ describe("get_pageviews", () => {
     const result = await handler({ from: "2025-01-01", to: "2025-01-31" });
     const data = JSON.parse(result.content[0].text);
     expect(data.rows).toEqual(MOCK_ROWS);
-    expect(data.total).toEqual(MOCK_DATA.total);
+    expect(data.total).toEqual({ id: "-", visits: 100 }); // tree_status stripped
     expect(data.truncated).toBe(false);
   });
 
@@ -270,8 +300,8 @@ describe("compare_periods", () => {
     const handler = tools().find(t => t.name === "compare_periods")!.handler;
     const result = await handler({
       metric_column: "visits",
-      period_a_from: "2025-01-01", period_a_to: "2025-01-31",
-      period_b_from: "2025-02-01", period_b_to: "2025-02-28",
+      baseline_from: "2025-01-01", baseline_to: "2025-01-31",
+      current_from: "2025-02-01", current_to: "2025-02-28",
     });
     const data = JSON.parse(result.content[0].text);
     expect(data.delta).toBe(50);
@@ -287,8 +317,8 @@ describe("compare_periods", () => {
     const handler = tools().find(t => t.name === "compare_periods")!.handler;
     const result = await handler({
       metric_column: "visits",
-      period_a_from: "2025-01-01", period_a_to: "2025-01-31",
-      period_b_from: "2025-02-01", period_b_to: "2025-02-28",
+      baseline_from: "2025-01-01", baseline_to: "2025-01-31",
+      current_from: "2025-02-01", current_to: "2025-02-28",
     });
     expect(JSON.parse(result.content[0].text).trend).toBe("down");
   });
@@ -297,8 +327,8 @@ describe("compare_periods", () => {
     const handler = tools().find(t => t.name === "compare_periods")!.handler;
     await handler({
       metric_column: "visits",
-      period_a_from: "2025-01-01", period_a_to: "2025-01-31",
-      period_b_from: "2025-02-01", period_b_to: "2025-02-28",
+      baseline_from: "2025-01-01", baseline_to: "2025-01-31",
+      current_from: "2025-02-01", current_to: "2025-02-28",
     });
     expect(mockGetReportData).toHaveBeenCalledWith(
       expect.any(String),
@@ -314,12 +344,62 @@ describe("compare_periods", () => {
     const handler = tools().find(t => t.name === "compare_periods")!.handler;
     const result = await handler({
       metric_column: "visits",
-      period_a_from: "2025-01-01", period_a_to: "2025-01-31",
-      period_b_from: "2025-02-01", period_b_to: "2025-02-28",
+      baseline_from: "2025-01-01", baseline_to: "2025-01-31",
+      current_from: "2025-02-01", current_to: "2025-02-28",
     });
     const data = JSON.parse(result.content[0].text);
-    expect(data.period_a.value).toBe(549);
-    expect(data.period_b.value).toBe(600);
+    expect(data.baseline.value).toBe(549);
+    expect(data.current.value).toBe(600);
+  });
+
+  it("fails the comparison when only the current period gets a slot refused", async () => {
+    let calls = 0;
+    // 1st slot: report info, 2nd: baseline, 3rd: current → refused
+    const slot = (): RateLimitResult => (++calls < 3 ? allowedSlot() : blockedSlot());
+    const handler = createToolRegistrations(freshToken(), slot).find(t => t.name === "compare_periods")!.handler;
+    await expect(handler({
+      metric_column: "visits",
+      baseline_from: "2025-01-01", baseline_to: "2025-01-31",
+      current_from: "2025-02-01", current_to: "2025-02-28",
+    })).rejects.toThrow("Rate limit exceeded");
+  });
+
+  it.each([
+    ["null", null],
+    ["an empty string (an attribute column)", ""],
+    ["a non-numeric string", "n/a"],
+  ])("rejects a totals value of %s instead of treating it as 0", async (_case, value) => {
+    mockGetReportData.mockResolvedValue({ total: { id: "-", visits: value }, rows: [] });
+    const handler = tools().find(t => t.name === "compare_periods")!.handler;
+    await expect(handler({
+      metric_column: "visits",
+      baseline_from: "2025-01-01", baseline_to: "2025-01-31",
+      current_from: "2025-02-01", current_to: "2025-02-28",
+    })).rejects.toThrow("is not numeric");
+  });
+
+  it("accepts a numeric string total", async () => {
+    mockGetReportData
+      .mockResolvedValueOnce({ total: { id: "-", visits: "100" }, rows: [] })
+      .mockResolvedValueOnce({ total: { id: "-", visits: "150.5" }, rows: [] });
+    const handler = tools().find(t => t.name === "compare_periods")!.handler;
+    const result = await handler({
+      metric_column: "visits",
+      baseline_from: "2025-01-01", baseline_to: "2025-01-31",
+      current_from: "2025-02-01", current_to: "2025-02-28",
+    });
+    expect(JSON.parse(result.content[0].text).delta).toBe(50.5);
+  });
+
+  it.each(["a,b", "", "two words"])("rejects metric_column %j before calling etracker", async (metric) => {
+    const handler = tools().find(t => t.name === "compare_periods")!.handler;
+    await expect(handler({
+      metric_column: metric,
+      baseline_from: "2025-01-01", baseline_to: "2025-01-31",
+      current_from: "2025-02-01", current_to: "2025-02-28",
+    })).rejects.toThrow();
+    expect(mockGetReportData).not.toHaveBeenCalled();
+    expect(mockGetReportInfo).not.toHaveBeenCalled();
   });
 
   it("throws when etracker returns no totals row", async () => {
@@ -327,8 +407,8 @@ describe("compare_periods", () => {
     const handler = tools().find(t => t.name === "compare_periods")!.handler;
     await expect(handler({
       metric_column: "visits",
-      period_a_from: "2025-01-01", period_a_to: "2025-01-31",
-      period_b_from: "2025-02-01", period_b_to: "2025-02-28",
+      baseline_from: "2025-01-01", baseline_to: "2025-01-31",
+      current_from: "2025-02-01", current_to: "2025-02-28",
     })).rejects.toThrow("no totals row");
   });
 
@@ -336,8 +416,8 @@ describe("compare_periods", () => {
     const handler = tools().find(t => t.name === "compare_periods")!.handler;
     await expect(handler({
       metric_column: "visits",
-      period_a_from: "2025-01-01", period_a_to: "2025-06-01", // > 90 days
-      period_b_from: "2025-02-01", period_b_to: "2025-02-28",
+      baseline_from: "2025-01-01", baseline_to: "2025-06-01", // > 90 days
+      current_from: "2025-02-01", current_to: "2025-02-28",
     })).rejects.toThrow("90-day limit");
   });
 
@@ -346,8 +426,8 @@ describe("compare_periods", () => {
       .find(t => t.name === "compare_periods")!.handler;
     await expect(handler({
       metric_column: "visits",
-      period_a_from: "2025-01-01", period_a_to: "2025-01-31",
-      period_b_from: "2025-02-01", period_b_to: "2025-02-28",
+      baseline_from: "2025-01-01", baseline_to: "2025-01-31",
+      current_from: "2025-02-01", current_to: "2025-02-28",
     })).rejects.toThrow("Rate limit exceeded");
   });
 
@@ -355,8 +435,8 @@ describe("compare_periods", () => {
     const handler = tools().find(t => t.name === "compare_periods")!.handler;
     await expect(handler({
       metric_column: "nonexistent_col",
-      period_a_from: "2025-01-01", period_a_to: "2025-01-31",
-      period_b_from: "2025-02-01", period_b_to: "2025-02-28",
+      baseline_from: "2025-01-01", baseline_to: "2025-01-31",
+      current_from: "2025-02-01", current_to: "2025-02-28",
     })).rejects.toThrow(`Column "nonexistent_col" not found`);
   });
 });
@@ -391,6 +471,7 @@ describe("filter validation", () => {
     ["an unknown attribute filter field", { attribute_filter: '[{"filterType":"extended","attributeId":"url","input":"x","filter":"include","type":"contains","extra":1}]' }, "attribute_filter"],
     ["a non-array attribute filter", { attribute_filter: '{"attributeId":"url"}' }, "attribute_filter"],
     ["a keyfigure filter with filter \"show\"", { keyfigure_filter: '[{"keyfigure":"visits","input":10,"type":"gt","filter":"show"}]' }, "keyfigure_filter"],
+    ["a fractional keyfigure input", { keyfigure_filter: '[{"keyfigure":"visits","input":1.5,"type":"gt","filter":"include"}]' }, "keyfigure_filter"],
     ["a non-numeric keyfigure input", { keyfigure_filter: '[{"keyfigure":"visits","input":"10","type":"gt","filter":"include"}]' }, "keyfigure_filter"],
     ["malformed JSON", { keyfigure_filter: "[{" }, "Invalid JSON in keyfigure_filter"],
   ])("rejects %s before calling etracker", async (_case, filter, message) => {

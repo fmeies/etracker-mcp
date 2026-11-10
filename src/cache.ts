@@ -61,8 +61,20 @@ export function cacheSizeBytes(): number {
   return totalBytes;
 }
 
+// Sorts object keys at every depth, so logically equal params (e.g. filters written
+// in a different key order) share one cache entry instead of costing another API call
+function canonical(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonical);
+  if (value !== null && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value)
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([key, nested]) => [key, canonical(nested)])
+    );
+  }
+  return value;
+}
+
 export function makeCacheKey(tool: string, params: Record<string, unknown>): string {
-  // A replacer array would also whitelist nested keys and drop filter contents, so sort the entries instead
-  const sortedParams = Object.fromEntries(Object.entries(params).sort(([a], [b]) => a.localeCompare(b)));
-  return `${tool}:${JSON.stringify(sortedParams)}`;
+  return `${tool}:${JSON.stringify(canonical(params))}`;
 }

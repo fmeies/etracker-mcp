@@ -22,7 +22,12 @@ const server = app.listen(port, () => {
   logger.info("server started", { port, mcp: "/mcp", health: "/health" });
 });
 
+let shuttingDown = false;
+
 function shutdown(signal: string): void {
+  // A second signal must not call server.close() again, which would fail and exit 1
+  if (shuttingDown) return;
+  shuttingDown = true;
   logger.info("shutting down", { signal });
   server.close((error) => {
     if (error) {

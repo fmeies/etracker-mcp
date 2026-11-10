@@ -13,6 +13,9 @@ import {
   type ReportDataParams,
   type ReportInfoResponse,
   type ReportData,
+  type ReportRow,
+  type AttributeFilter,
+  type KeyfigureFilter,
 } from "./analytics-api.js";
 
 const MAX_DAYS = 90;
@@ -28,7 +31,16 @@ const TRUNCATION_PROBE_ROWS = 1;
 // etracker requires at least one data row per request; the totals row comes on top
 const TOTALS_ONLY_LIMIT = 1;
 const TOKEN_HASH_LENGTH = 16;
-const TOKEN_HASH_CACHE_MAX = 1000;
+const MS_PER_SECOND = 1000;
+
+export const SERVER_INSTRUCTIONS = `Query etracker web analytics for the connected account.
+
+Workflow: list_reports (report IDs) → get_report_info (attribute and figure IDs for one report) → query.
+Common reports: EATime (traffic per year/month; EATimeWeek / EATimeDay for finer grain), EAPage (pages), EAMedium (marketing channels), EACampaign (campaigns), EAReferrer (organic referrers), EAConversions (conversions), EAGeo, EADeviceType.
+- For rankings like "top pages", use get_report_data with report_id EAPage, sort_column set to a figure and sort_order "desc".
+- For "this period vs. last period", use compare_periods: it compares etracker's own totals, which are correct for unique counts and rates. Never add up rows to get a total — use the "total" field.
+- Quota: each partner has about 20 etracker calls per 5 minutes; repeated identical queries within 5 minutes are cached and free. Prefer one well-chosen query over many exploratory ones.
+- Date ranges are YYYY-MM-DD, max ${MAX_DAYS} days.`;
 
 const QUERY_DEFAULTS_DESCRIPTION =
   `Request only the attributes you need (max ${MAX_COLUMNS}; default: the report's own default breakdown). Returns at most ${DEFAULT_ROW_LIMIT} rows unless limit is set (max ${MAX_ROW_LIMIT}); "total" holds etracker's period totals. Max ${MAX_DAYS}-day range.`;
@@ -42,18 +54,23 @@ interface Upstream {
   cached<T>(name: string, params: Record<string, unknown>, fetch: () => Promise<T>): Promise<T>;
 }
 
-const tokenHashCache = new Map<string, string>();
-
 function tokenHash(token: string): string {
-  let hash = tokenHashCache.get(token);
-  if (!hash) {
-    hash = createHash("sha256").update(token).digest("hex").slice(0, TOKEN_HASH_LENGTH);
-    if (tokenHashCache.size >= TOKEN_HASH_CACHE_MAX) {
-      tokenHashCache.delete(tokenHashCache.keys().next().value!);
-    }
-    tokenHashCache.set(token, hash);
+  return createHash("sha256").update(token).digest("hex").slice(0, TOKEN_HASH_LENGTH);
+}
+
+// Identical concurrent cache misses share one upstream call (and one rate-limit slot)
+const pendingFetches = new Map<string, Promise<unknown>>();
+
+async function fetchWithSlot<T>(consumeRateSlot: RateSlot, fetch: () => Promise<T>): Promise<T> {
+  const slot = consumeRateSlot();
+  if (!slot.allowed) {
+    throw new Error(`Rate limit exceeded. Retry after ${Math.ceil(slot.retryAfterMs / MS_PER_SECOND)}s.`);
   }
-  return hash;
+  try {
+    return await fetch();
+  } finally {
+    slot.release();
+  }
 }
 
 function createUpstream(token: string, consumeRateSlot: RateSlot): Upstream {
@@ -66,13 +83,17 @@ function createUpstream(token: string, consumeRateSlot: RateSlot): Upstream {
       const hit = cacheGet<T>(key);
       if (hit !== undefined) return hit;
 
-      const slot = consumeRateSlot();
-      if (!slot.allowed) {
-        throw new Error(`Rate limit exceeded. Retry after ${Math.ceil(slot.retryAfterMs / 1000)}s.`);
-      }
-      const result = await fetch();
-      cacheSet(key, result);
-      return result;
+      const pending = pendingFetches.get(key);
+      if (pending) return pending as Promise<T>;
+
+      const request = fetchWithSlot(consumeRateSlot, fetch)
+        .then((result) => {
+          cacheSet(key, result);
+          return result;
+        })
+        .finally(() => pendingFetches.delete(key));
+      pendingFetches.set(key, request);
+      return request;
     },
   };
 }
@@ -118,7 +139,7 @@ const attributeFilterSchema = z.array(z.object({
 
 const keyfigureFilterSchema = z.array(z.object({
   keyfigure: z.string().min(1),
-  input: z.number(),
+  input: z.number().int(),
   type: z.enum(["lt", "gt", "eq"]),
   filter: z.enum(["include", "exclude"]),
 }).strict()).max(MAX_FILTERS);
@@ -223,13 +244,17 @@ const getReportDataShape = {
   ),
 };
 
+const SINGLE_ID = /^[^,\s]+$/;
+
 const comparePeriodsShape = {
   report_id: z.string().optional().describe("Report ID to query. Defaults to the pageviews report (EATime)."),
-  metric_column: z.string().describe("Figure ID to compare between the two periods. Only this figure is fetched."),
-  period_a_from: z.string().describe("Period A start (YYYY-MM-DD)"),
-  period_a_to: z.string().describe("Period A end (YYYY-MM-DD)"),
-  period_b_from: z.string().describe("Period B start (YYYY-MM-DD)"),
-  period_b_to: z.string().describe("Period B end (YYYY-MM-DD)"),
+  metric_column: z.string().regex(SINGLE_ID, "metric_column must be a single key figure ID").describe(
+    "One key figure ID to compare, e.g. unique_visits. Use get_report_info to discover IDs."
+  ),
+  baseline_from: z.string().describe("Baseline (earlier) period start, YYYY-MM-DD — e.g. the month before"),
+  baseline_to: z.string().describe("Baseline (earlier) period end, YYYY-MM-DD"),
+  current_from: z.string().describe("Current (later) period start, YYYY-MM-DD — e.g. last month"),
+  current_to: z.string().describe("Current (later) period end, YYYY-MM-DD"),
 };
 
 const reportIdShape = {
@@ -253,7 +278,23 @@ interface QueryArgs {
 
 const SORT_ORDER = { desc: "1", asc: "2" } as const;
 
-function buildParams(reportId: string, args: QueryArgs): ReportDataParams {
+interface ParsedFilters {
+  attributeFilter?: AttributeFilter[];
+  keyfigureFilter?: KeyfigureFilter[];
+}
+
+function parseFilters(args: QueryArgs): ParsedFilters {
+  return {
+    attributeFilter: args.attribute_filter
+      ? parseFilter(args.attribute_filter, attributeFilterSchema, "attribute_filter")
+      : undefined,
+    keyfigureFilter: args.keyfigure_filter
+      ? parseFilter(args.keyfigure_filter, keyfigureFilterSchema, "keyfigure_filter")
+      : undefined,
+  };
+}
+
+function buildParams(reportId: string, args: QueryArgs, filters: ParsedFilters = {}): ReportDataParams {
   return {
     reportId,
     startDate: args.from,
@@ -264,12 +305,7 @@ function buildParams(reportId: string, args: QueryArgs): ReportDataParams {
     offset: args.offset,
     sortColumn: args.sort_column,
     sortOrder: args.sort_order && SORT_ORDER[args.sort_order],
-    attributeFilter: args.attribute_filter
-      ? parseFilter(args.attribute_filter, attributeFilterSchema, "attribute_filter")
-      : undefined,
-    keyfigureFilter: args.keyfigure_filter
-      ? parseFilter(args.keyfigure_filter, keyfigureFilterSchema, "keyfigure_filter")
-      : undefined,
+    ...filters,
   };
 }
 
@@ -277,11 +313,18 @@ function json(data: unknown) {
   return { content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }] };
 }
 
+// etracker's internal row-type marker ("=S" totals, "=0" data) is noise for the model
+const TREE_STATUS_FIELD = "tree_status";
+
+function withoutTreeStatus(row: ReportRow): ReportRow {
+  return Object.fromEntries(Object.entries(row).filter(([field]) => field !== TREE_STATUS_FIELD));
+}
+
 function rowsResult(data: ReportData, limit: number, offset = 0) {
   const truncated = data.rows.length > limit;
-  const rows = data.rows.slice(0, limit);
+  const rows = data.rows.slice(0, limit).map(withoutTreeStatus);
   return json({
-    total: data.total,
+    total: data.total && withoutTreeStatus(data.total),
     rows,
     row_count: rows.length,
     limit,
@@ -294,11 +337,21 @@ function rowsResult(data: ReportData, limit: number, offset = 0) {
 }
 
 async function queryReport(upstream: Upstream, reportId: string, args: QueryArgs) {
+  // Validate everything before any upstream call, so bad input never costs quota
   validateDateRange(args.from, args.to);
+  const filters = parseFilters(args);
   const cols = await resolveColumns(upstream, reportId, args.attributes, args.figures);
-  const params = buildParams(reportId, { ...args, ...cols });
+  const params = buildParams(reportId, { ...args, ...cols }, filters);
   const data = await fetchReportData(upstream, { ...params, limit: params.limit + TRUNCATION_PROBE_ROWS });
   return rowsResult(data, params.limit, params.offset);
+}
+
+function toNumber(value: string | number | null): number | undefined {
+  // Number(null) and Number("") are 0, which would silently report an empty total as zero
+  if (typeof value === "number") return Number.isFinite(value) ? value : undefined;
+  if (typeof value !== "string" || value.trim() === "") return undefined;
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : undefined;
 }
 
 function totalValue(data: ReportData, metric: string): number {
@@ -309,9 +362,9 @@ function totalValue(data: ReportData, metric: string): number {
   if (value === undefined) {
     throw new Error(`Column "${metric}" not found in report results. Use get_report_info to discover available figure IDs.`);
   }
-  const numeric = typeof value === "number" ? value : Number(value);
-  if (!Number.isFinite(numeric)) {
-    throw new Error(`Total for "${metric}" is not numeric: ${JSON.stringify(value)}`);
+  const numeric = toNumber(value);
+  if (numeric === undefined) {
+    throw new Error(`Total for "${metric}" is not numeric (${JSON.stringify(value)}). metric_column must be a key figure, not an attribute.`);
   }
   return numeric;
 }
@@ -323,8 +376,8 @@ function trendOf(delta: number): "up" | "down" | "flat" {
 }
 
 async function comparePeriods(upstream: Upstream, args: z.infer<z.ZodObject<typeof comparePeriodsShape>>) {
-  validateDateRange(args.period_a_from, args.period_a_to);
-  validateDateRange(args.period_b_from, args.period_b_to);
+  validateDateRange(args.baseline_from, args.baseline_to);
+  validateDateRange(args.current_from, args.current_to);
 
   const reportId = args.report_id ?? pageviewsReportId();
   // Only the totals row is used, so fetch the metric alone with the smallest page
@@ -334,18 +387,18 @@ async function comparePeriods(upstream: Upstream, args: z.infer<z.ZodObject<type
     return totalValue(data, args.metric_column);
   };
 
-  const [valueA, valueB] = await Promise.all([
-    periodTotal(args.period_a_from, args.period_a_to),
-    periodTotal(args.period_b_from, args.period_b_to),
+  const [baseline, current] = await Promise.all([
+    periodTotal(args.baseline_from, args.baseline_to),
+    periodTotal(args.current_from, args.current_to),
   ]);
-  const delta = valueB - valueA;
-  const pct = valueA !== 0 ? ((delta / valueA) * 100).toFixed(2) : null;
+  const delta = current - baseline;
+  const pct = baseline !== 0 ? ((delta / baseline) * 100).toFixed(2) : null;
 
   return json({
     metric: args.metric_column,
     report_id: reportId,
-    period_a: { from: args.period_a_from, to: args.period_a_to, value: valueA },
-    period_b: { from: args.period_b_from, to: args.period_b_to, value: valueB },
+    baseline: { from: args.baseline_from, to: args.baseline_to, value: baseline },
+    current: { from: args.current_from, to: args.current_to, value: current },
     delta,
     change_pct: pct ? `${pct}%` : "n/a",
     trend: trendOf(delta),
@@ -397,7 +450,7 @@ export function createToolRegistrations(etrackerToken: string, consumeRateSlot: 
           attributes: info.attributes.map((a) => ({ id: a.id, label: a.label })),
           figures: info.figures
             .filter((f) => f.visible && !f.deprecated)
-            .map((f) => ({ id: f.id, label: f.label, group: f.groupLabel })),
+            .map((f) => ({ id: f.id, label: f.label, group: f.groupLabel, recommended: f.recommended })),
         });
       },
     },
@@ -411,9 +464,9 @@ export function createToolRegistrations(etrackerToken: string, consumeRateSlot: 
       },
     },
 
-    reportQueryTool("get_pageviews", "web analytics data", pageviewsReportId, upstream),
+    reportQueryTool("get_pageviews", "traffic over time — visits, visitors and page impressions per year/month, not per page (for top pages use get_report_data with EAPage)", pageviewsReportId, upstream),
     reportQueryTool("get_conversions", "conversion and e-commerce data", conversionsReportId, upstream),
-    reportQueryTool("get_ad_performance", "marketing/ad channel performance data", adReportId, upstream),
+    reportQueryTool("get_ad_performance", "traffic and conversions per marketing channel (medium)", adReportId, upstream),
 
     {
       name: "get_report_data",
@@ -427,7 +480,7 @@ export function createToolRegistrations(etrackerToken: string, consumeRateSlot: 
     {
       name: "compare_periods",
       description:
-        `Compares a metric between two date ranges using etracker's own period totals (correct for unique counts and rates alike). Each period max ${MAX_DAYS} days.`,
+        `Compares one key figure between a baseline (earlier) and a current (later) period using etracker's own period totals (correct for unique counts and rates alike). delta = current − baseline; change_pct is relative to the baseline. Each period max ${MAX_DAYS} days.`,
       schema: comparePeriodsShape,
       handler: async (input) => comparePeriods(upstream, z.object(comparePeriodsShape).parse(input)),
     },

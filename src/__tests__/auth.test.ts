@@ -7,7 +7,7 @@ function mockReq(headers: Record<string, string>): AuthenticatedRequest {
 }
 
 function mockRes() {
-  const res = { status: vi.fn().mockReturnThis(), json: vi.fn().mockReturnThis() };
+  const res = { status: vi.fn().mockReturnThis(), json: vi.fn().mockReturnThis(), setHeader: vi.fn() };
   return res as unknown as Response;
 }
 
@@ -31,6 +31,7 @@ describe("authMiddleware", () => {
   ])("rejects a request with %s", (_case, authorization) => {
     const { res, next } = authenticate(authorization);
     expect(res.status).toHaveBeenCalledWith(401);
+    expect(res.setHeader).toHaveBeenCalledWith("WWW-Authenticate", 'Bearer realm="etracker-mcp"');
     expect(next).not.toHaveBeenCalled();
   });
 

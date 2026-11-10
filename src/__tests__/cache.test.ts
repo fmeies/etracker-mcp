@@ -70,6 +70,13 @@ describe("makeCacheKey", () => {
     expect(k1).not.toBe(k2);
   });
 
+  it("produces the same key regardless of nested key order", async () => {
+    const { makeCacheKey } = await import("../cache.js");
+    const k1 = makeCacheKey("tool", { keyfigureFilter: [{ keyfigure: "visits", input: 1, type: "gt" }] });
+    const k2 = makeCacheKey("tool", { keyfigureFilter: [{ type: "gt", input: 1, keyfigure: "visits" }] });
+    expect(k1).toBe(k2);
+  });
+
   it("produces different keys for different nested filter values", async () => {
     const { makeCacheKey } = await import("../cache.js");
     const k1 = makeCacheKey("tool", { reportId: "EATime", attributeFilter: [{ attributeId: "page", input: "/shop" }] });

@@ -64,6 +64,7 @@ export function parsePartnerKeys(raw: string | undefined): PartnerKeys {
 
 function reject(res: Response, reason: string, message: string, path: string): void {
   logger.warn("auth failed", { reason, path });
+  res.setHeader("WWW-Authenticate", 'Bearer realm="etracker-mcp"');
   res.status(401).json({ error: `Unauthorized: ${message}` });
 }
 

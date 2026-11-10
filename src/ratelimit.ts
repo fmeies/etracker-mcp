@@ -1,81 +1,104 @@
 /**
- * Three-layer rate limiting against etracker upstream (50 req / 5 min, max 10 parallel).
- * A slot is consumed per actual etracker API call (cache hits and MCP protocol
- * traffic are free). State is in-memory, so the limits only hold for a single replica.
+ * Rate limiting against etracker's upstream limits (50 calls / 5 min, max 10 parallel).
  *
- * 1. Burst guard (global):   max 8 req / 10 sec  — stays well under the 10-parallel limit
- * 2. Global window:          max 40 req / 5 min  — 80% of etracker's quota, leaves headroom for retries
- * 3. Per-partner window:     max 20 req / 5 min  — so one partner can never exhaust the global budget alone
+ * One slot is acquired per actual etracker API call (cache hits and MCP protocol
+ * traffic are free) and released when the call finishes. Windows are sliding logs
+ * rather than fixed buckets, so no 5-minute span can ever exceed the limit, even
+ * across what would otherwise be a bucket reset.
+ *
+ * 1. Parallel guard (global): max 8 calls in flight — below etracker's 10
+ * 2. Burst guard (global):    max 8 calls / 10 s
+ * 3. Global window:           max 40 calls / 5 min — 80% of etracker's quota, leaves headroom
+ * 4. Per-partner window:      max 20 calls / 5 min — one partner can never exhaust the global budget
+ *
+ * State is in-memory, so the limits only hold for a single replica.
  */
 
-const BURST_WINDOW_MS = 10_000;   // 10 seconds
+const MAX_PARALLEL_CALLS = 8;
+// A parallel slot frees up as soon as any in-flight call finishes, so retry soon
+const PARALLEL_RETRY_AFTER_MS = 1_000;
+
+const BURST_WINDOW_MS = 10_000;
 const BURST_MAX = 8;
 
-const WINDOW_MS = 5 * 60_000;    // 5 minutes
-const MAX_GLOBAL = 40;            // 80% of etracker's 50
-const MAX_PER_PARTNER = 20;       // half of global so ≥2 partners can always coexist
+const WINDOW_MS = 5 * 60_000;
+const MAX_GLOBAL = 40;
+const MAX_PER_PARTNER = 20;
 
-export interface RateLimitResult {
-  allowed: boolean;
-  retryAfterMs: number;
+export type RateLimitResult =
+  | { allowed: true; release: () => void }
+  | { allowed: false; retryAfterMs: number };
+
+export interface RateLimiter {
+  acquire(partnerId: string): RateLimitResult;
 }
 
-interface Bucket {
-  count: number;
-  resetAt: number;
-}
+class SlidingWindow {
+  private readonly timestamps: number[] = [];
 
-const partnerBuckets = new Map<string, Bucket>();
-const globalBucket: Bucket = { count: 0, resetAt: Date.now() + WINDOW_MS };
-const burstBucket: Bucket = { count: 0, resetAt: Date.now() + BURST_WINDOW_MS };
+  constructor(private readonly limit: number, private readonly windowMs: number) {}
 
-function refreshBucket(bucket: Bucket, windowMs: number): Bucket {
-  if (Date.now() >= bucket.resetAt) {
-    bucket.count = 0;
-    bucket.resetAt = Date.now() + windowMs;
-  }
-  return bucket;
-}
-
-function tryConsume(bucket: Bucket, limit: number): RateLimitResult {
-  if (bucket.count >= limit) {
-    return { allowed: false, retryAfterMs: bucket.resetAt - Date.now() };
-  }
-  bucket.count++;
-  return { allowed: true, retryAfterMs: 0 };
-}
-
-function undo(bucket: Bucket): void {
-  bucket.count = Math.max(0, bucket.count - 1);
-}
-
-export function checkRateLimit(partnerId: string): RateLimitResult {
-  refreshBucket(burstBucket, BURST_WINDOW_MS);
-  refreshBucket(globalBucket, WINDOW_MS);
-
-  // Layer 1: burst guard
-  const burst = tryConsume(burstBucket, BURST_MAX);
-  if (!burst.allowed) return burst;
-
-  // Layer 2: global 5-min window
-  const global = tryConsume(globalBucket, MAX_GLOBAL);
-  if (!global.allowed) {
-    undo(burstBucket);
-    return global;
+  isFull(now: number): boolean {
+    while (this.timestamps.length > 0 && this.timestamps[0] <= now - this.windowMs) {
+      this.timestamps.shift();
+    }
+    return this.timestamps.length >= this.limit;
   }
 
-  // Layer 3: per-partner 5-min window
-  let partnerBucket = partnerBuckets.get(partnerId);
-  if (!partnerBucket || Date.now() >= partnerBucket.resetAt) {
-    partnerBucket = { count: 0, resetAt: Date.now() + WINDOW_MS };
-    partnerBuckets.set(partnerId, partnerBucket);
-  }
-  const partner = tryConsume(partnerBucket, MAX_PER_PARTNER);
-  if (!partner.allowed) {
-    undo(burstBucket);
-    undo(globalBucket);
-    return partner;
+  /** Time until the oldest call leaves the window; only meaningful when full. */
+  retryAfterMs(now: number): number {
+    return this.timestamps[0] + this.windowMs - now;
   }
 
-  return { allowed: true, retryAfterMs: 0 };
+  record(now: number): void {
+    this.timestamps.push(now);
+  }
 }
+
+export function createRateLimiter(now: () => number = Date.now): RateLimiter {
+  const burst = new SlidingWindow(BURST_MAX, BURST_WINDOW_MS);
+  const global = new SlidingWindow(MAX_GLOBAL, WINDOW_MS);
+  // Partner IDs come only from PARTNER_API_KEYS, so this map is bounded by configuration
+  const partners = new Map<string, SlidingWindow>();
+  let inFlight = 0;
+
+  function partnerWindow(partnerId: string): SlidingWindow {
+    let window = partners.get(partnerId);
+    if (!window) {
+      window = new SlidingWindow(MAX_PER_PARTNER, WINDOW_MS);
+      partners.set(partnerId, window);
+    }
+    return window;
+  }
+
+  return {
+    acquire(partnerId: string): RateLimitResult {
+      if (inFlight >= MAX_PARALLEL_CALLS) {
+        return { allowed: false, retryAfterMs: PARALLEL_RETRY_AFTER_MS };
+      }
+
+      const time = now();
+      const windows = [burst, global, partnerWindow(partnerId)];
+      // Check every window before recording in any, so a refused call costs nothing
+      const fullWindow = windows.find((window) => window.isFull(time));
+      if (fullWindow) {
+        return { allowed: false, retryAfterMs: fullWindow.retryAfterMs(time) };
+      }
+
+      for (const window of windows) window.record(time);
+      inFlight++;
+      let released = false;
+      return {
+        allowed: true,
+        release: () => {
+          if (released) return;
+          released = true;
+          inFlight--;
+        },
+      };
+    },
+  };
+}
+
+/** Process-wide limiter shared by all requests. */
+export const rateLimiter = createRateLimiter();
