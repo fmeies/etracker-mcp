@@ -71,6 +71,15 @@ describe("rate limiter", () => {
     }
   });
 
+  it("reports the longest wait when several windows are full", () => {
+    callsSpacedOut(20); // partner-a capped for ~5 minutes
+    for (let i = 0; i < 8; i++) call("partner-b"); // burst full for 10 s
+    const wait = retryAfter(call("partner-a"));
+    expect(wait).toBeGreaterThan(BURST_WINDOW_MS);
+    clock += wait;
+    expect(call("partner-a").allowed).toBe(true);
+  });
+
   it("does not record a refused call in any window", () => {
     callsSpacedOut(20); // partner-a is capped; 20 global slots used
     for (let i = 0; i < 50; i++) call("partner-a"); // all refused

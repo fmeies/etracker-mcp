@@ -58,20 +58,10 @@ function tokenHash(token: string): string {
   return createHash("sha256").update(token).digest("hex").slice(0, TOKEN_HASH_LENGTH);
 }
 
-// Identical concurrent cache misses share one upstream call (and one rate-limit slot)
+// Identical concurrent cache misses share one upstream call (and one rate-limit slot).
+// Only calls that already hold a slot are registered, so one partner's refusal is never shared.
+// A shared call is charged to the partner that started it; the others ride along for free.
 const pendingFetches = new Map<string, Promise<unknown>>();
-
-async function fetchWithSlot<T>(consumeRateSlot: RateSlot, fetch: () => Promise<T>): Promise<T> {
-  const slot = consumeRateSlot();
-  if (!slot.allowed) {
-    throw new Error(`Rate limit exceeded. Retry after ${Math.ceil(slot.retryAfterMs / MS_PER_SECOND)}s.`);
-  }
-  try {
-    return await fetch();
-  } finally {
-    slot.release();
-  }
-}
 
 function createUpstream(token: string, consumeRateSlot: RateSlot): Upstream {
   // Cache keys are scoped per token so partners never see each other's data
@@ -86,12 +76,19 @@ function createUpstream(token: string, consumeRateSlot: RateSlot): Upstream {
       const pending = pendingFetches.get(key);
       if (pending) return pending as Promise<T>;
 
-      const request = fetchWithSlot(consumeRateSlot, fetch)
+      const slot = consumeRateSlot();
+      if (!slot.allowed) {
+        throw new Error(`Rate limit exceeded. Retry after ${Math.ceil(slot.retryAfterMs / MS_PER_SECOND)}s.`);
+      }
+      const request = fetch()
         .then((result) => {
           cacheSet(key, result);
           return result;
         })
-        .finally(() => pendingFetches.delete(key));
+        .finally(() => {
+          slot.release();
+          pendingFetches.delete(key);
+        });
       pendingFetches.set(key, request);
       return request;
     },

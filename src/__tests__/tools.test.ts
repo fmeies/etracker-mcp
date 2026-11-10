@@ -132,6 +132,16 @@ describe("rate limit slots", () => {
     expect(consumeRateSlot).toHaveBeenCalledOnce();
   });
 
+  it("does not hand one partner's refusal to another partner sharing the token", async () => {
+    const token = freshToken();
+    const args = { from: "2025-01-01", to: "2025-01-31", attributes: "date", figures: "visits" };
+    const capped = createToolRegistrations(token, blockedSlot).find(t => t.name === "get_pageviews")!.handler;
+    const withQuota = createToolRegistrations(token, allowedSlot).find(t => t.name === "get_pageviews")!.handler;
+    const [refused, served] = await Promise.allSettled([capped(args), withQuota(args)]);
+    expect(refused.status).toBe("rejected");
+    expect(served.status).toBe("fulfilled");
+  });
+
   it("does not spend quota on invalid filters", async () => {
     const consumeRateSlot = vi.fn(allowedSlot);
     const handler = createToolRegistrations(freshToken(), consumeRateSlot)

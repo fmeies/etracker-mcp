@@ -79,8 +79,8 @@ docker run -p 3000:3000 \
 
 ```bash
 cp .env.example .env
-# Edit .env: set PARTNER_API_KEYS and IMAGE
-docker compose up -d
+# Edit .env: set PARTNER_API_KEYS
+docker compose up -d --build   # builds the image from the local Dockerfile
 ```
 
 ## Kubernetes / Helm

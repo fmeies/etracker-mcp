@@ -79,10 +79,11 @@ export function createRateLimiter(now: () => number = Date.now): RateLimiter {
 
       const time = now();
       const windows = [burst, global, partnerWindow(partnerId)];
-      // Check every window before recording in any, so a refused call costs nothing
-      const fullWindow = windows.find((window) => window.isFull(time));
-      if (fullWindow) {
-        return { allowed: false, retryAfterMs: fullWindow.retryAfterMs(time) };
+      // Check every window before recording in any, so a refused call costs nothing.
+      // Report the longest wait: retrying when only the shortest window frees up would fail again.
+      const fullWindows = windows.filter((window) => window.isFull(time));
+      if (fullWindows.length > 0) {
+        return { allowed: false, retryAfterMs: Math.max(...fullWindows.map((window) => window.retryAfterMs(time))) };
       }
 
       for (const window of windows) window.record(time);

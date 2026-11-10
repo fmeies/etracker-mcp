@@ -1,6 +1,6 @@
 services:
     etracker-mcp:
-      image: ${IMAGE}
+      build: .
       ports:
         - "127.0.0.1:${PORT}:${PORT}"
       environment:
