@@ -2,7 +2,7 @@
 replicaCount: 1
 
 image:
-  repository: etracker-mcp
+  repository: ghcr.io/fmeies/etracker-mcp
   tag: latest
   # "latest" is a moving tag, so always pull; pin a version tag to use IfNotPresent
   pullPolicy: Always
