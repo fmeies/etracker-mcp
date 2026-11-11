@@ -34,6 +34,11 @@ describe("HTTP app", () => {
     expect(await res.json()).toEqual({ status: "ok" });
   });
 
+  it("does not advertise the framework via X-Powered-By", async () => {
+    const res = await fetch(`${baseUrl}/health`);
+    expect(res.headers.get("x-powered-by")).toBeNull();
+  });
+
   it("rejects /mcp without credentials", async () => {
     const res = await fetch(`${baseUrl}/mcp`, { method: "POST" });
     expect(res.status).toBe(401);
