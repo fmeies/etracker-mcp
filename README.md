@@ -80,8 +80,11 @@ docker run -p 3000:3000 \
 ```bash
 cp .env.example .env
 # Edit .env: set PARTNER_API_KEYS
-docker compose up -d --build   # builds the image from the local Dockerfile
+docker compose pull && docker compose up -d   # prebuilt image from GHCR
+docker compose up -d --build                  # or build from the local Dockerfile
 ```
+
+Every push to `main` publishes `ghcr.io/fmeies/etracker-mcp:latest` (linux/amd64) after the tests pass, plus a `sha-<commit>` tag. Git tags `vX.Y.Z` publish matching version tags to pin in production.
 
 ## Kubernetes / Helm
 
