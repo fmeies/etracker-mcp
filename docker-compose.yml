@@ -1,8 +1,8 @@
 services:
     etracker-mcp:
-      # Pulls the prebuilt image from GHCR; `docker compose up --build` builds locally instead
+      # Pull-only on purpose: without build, a failed pull errors out instead of silently
+      # falling back to a slow local build. To test local changes, see README.
       image: ghcr.io/fmeies/etracker-mcp:latest
-      build: .
       ports:
         - "127.0.0.1:${PORT}:${PORT}"
       environment:

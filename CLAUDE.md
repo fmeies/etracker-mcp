@@ -118,7 +118,7 @@ The `/mcp` endpoint is stateless: every request gets a fresh `StreamableHTTPServ
 
 - `replicaCount` must be 1 and `partnerApiKeys` is required — the chart fails to render otherwise. Deployment strategy is `Recreate` so two limiters never run at once; a secret checksum annotation restarts the pod when keys change.
 - Service defaults to `ClusterIP` (expose via the TLS ingress); `NodePort` is opt-in for local testing.
-- `.github/workflows/docker.yml` publishes `ghcr.io/fmeies/etracker-mcp` (linux/amd64) on pushes to `main` (`latest`, `sha-*`) and `v*` tags (semver), only after `test.yml` passes (reused via `workflow_call`). The Helm chart and docker-compose default to this image.
+- `.github/workflows/docker.yml` publishes `ghcr.io/fmeies/etracker-mcp` (linux/amd64) on pushes to `main` (`latest`, `sha-*`) and `v*` tags (semver), only after `test.yml` passes (reused via `workflow_call`). The Helm chart and docker-compose default to this image; compose is pull-only (no `build:`), so a failed pull fails loudly instead of triggering a slow local build.
 - Docker and CI use `npm install`, not `npm ci`: the macOS-generated lockfile lacks Linux-only optional packages (`@emnapi/*`), which makes `npm ci` fail on Alpine.
 - The pod runs as non-root (uid 1000) with a read-only root filesystem and all capabilities dropped.
 

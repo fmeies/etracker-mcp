@@ -124,6 +124,8 @@ const handleMcpRequest: RequestHandler = async (req: AuthenticatedRequest, res) 
 
 export function createApp(partnerKeys: PartnerKeys): Express {
   const app = express();
+  // Don't advertise the framework to scanners
+  app.disable("x-powered-by");
   app.use(cors);
   app.use(requestLogger);
 
